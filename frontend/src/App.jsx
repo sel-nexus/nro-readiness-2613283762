@@ -5,6 +5,7 @@ import {BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate, 
 import {SharedShell} from './components/SharedShell.jsx';
 import LoginPage from './pages/LoginPage.jsx';
 import Portfolio from './pages/Portfolio.jsx';
+import SiteWorkspace from './pages/SiteWorkspace.jsx';
 import {continueAs, readAccess, resolveRoute, signIn, signOut, switchUser} from './utils/access.js';
 import {createBrowserStore} from './utils/storage.js';
 
@@ -21,21 +22,15 @@ function MissingPage({title}) {
 MissingPage.propTypes = {title: PropTypes.string.isRequired};
 
 /** Resolve an exact released identifier before mounting the site workspace. */
-function ReleasedSite({board}) {
+function ReleasedSite({board, actor, store, notify}) {
   const {siteId} = useParams();
   if (!Object.hasOwn(board.sites, siteId)) return <MissingPage title="Site not found" />;
   const site = board.sites[siteId];
-  // Mount SiteWorkspace here with the validated site, the shared board/store, actor and notify.
-  return (
-    <header className="card p-5">
-      <p className="meta">{site.id}</p>
-      <h1 className="text-title font-semibold text-ink">{site.name}</h1>
-      <p className="mt-1 text-muted">{site.neighborhood}</p>
-    </header>
-  );
+  return <SiteWorkspace key={siteId} board={board} site={site} actor={actor} store={store} notify={notify} />;
 }
 
-ReleasedSite.propTypes = {board: PropTypes.object.isRequired};
+ReleasedSite.propTypes = {board: PropTypes.object.isRequired, actor: PropTypes.object.isRequired,
+  store: PropTypes.object.isRequired, notify: PropTypes.func.isRequired};
 
 /** Render protected content only from a validated committed snapshot. */
 function BoardRoutes({store}) {
@@ -95,7 +90,9 @@ function BoardRoutes({store}) {
       {location.state?.message && <p role="status" className="mb-3 rounded-control border border-line bg-card px-3 py-2">{location.state.message}</p>}
       <Routes>
         <Route path="/" element={<Portfolio board={board} actor={actor} query={query} />} />
-        <Route path="/sites/:siteId" element={<ReleasedSite board={board} />} />
+        <Route path="/sites/:siteId" element={
+          <ReleasedSite board={board} actor={actor} store={store} notify={notify} />
+        } />
         <Route path="/service-health" element={
           <h1 className="text-title font-semibold text-ink">Service health</h1>
         } />

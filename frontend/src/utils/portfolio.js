@@ -1,6 +1,7 @@
 /** Project portfolio triage and the unchanged program history from committed board records. */
 import {DIRECTORY} from '../data/people.js';
 import {BOARD_AT} from '../data/register.js';
+import {deriveReadiness} from './readiness.js';
 
 export const FILTERS = Object.freeze(['All', 'Green', 'Amber', 'Red', 'Hold', 'Pending approval', 'Dispatched', 'On air', 'Data exception']);
 export const RISK_RANK = Object.freeze({Red: 0, Amber: 1, Green: 2});
@@ -88,12 +89,21 @@ export function exceptionsFor(sites) {
 
 /** Keep full-board totals separate from the filtered register and map. */
 export function selectPortfolio(board, {query = '', chip = 'All', sort, exception} = {}) {
-  const full = Object.values(board.sites);
+  const sites = Object.fromEntries(Object.entries(board.sites).map(([id, site]) => {
+    const {risk, disposition, current, quality} = deriveReadiness(site, BOARD_AT, board.faults, board.audit.snapshots[site.assessment?.snapshotId]);
+    const assessment = site.lifecycle === 'open' && !current ? null : site.assessment;
+    const changedQuality = Object.keys(quality).filter(row => site.rows[row].quality !== quality[row]);
+    const rows = changedQuality.length ? {...site.rows} : site.rows;
+    for (const key of changedQuality) rows[key] = {...rows[key], quality: quality[key]};
+    return [id, risk === site.risk && disposition === site.disposition && assessment === site.assessment && rows === site.rows
+      ? site : {...site, risk, disposition, assessment, rows}];
+  }));
+  const full = Object.values(sites);
   const risk = {Green: 0, Amber: 0, Red: 0};
   full.forEach(site => { risk[site.risk] += 1; });
-  const exceptions = exceptionsFor(board.sites);
+  const exceptions = exceptionsFor(sites);
   const group = exceptions.find(entry => entry.id === exception);
-  const matching = searchSites(board.sites, query).filter(site => matchesChip(site, chip) && (!group || group.sites.includes(site)));
+  const matching = searchSites(sites, query).filter(site => matchesChip(site, chip) && (!group || group.sites.includes(site)));
   const visible = !sort && query.trim() ? matching : matching.sort((a, b) => compareSites(a, b, sort));
   return {visible, exceptions, total: full.length, risk, atRisk: risk.Amber + risk.Red,
     hold: full.filter(site => site.holdActive).length, dispatched: full.filter(site => site.lifecycle === 'dispatched').length,
