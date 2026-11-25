@@ -369,3 +369,12 @@ export function createStore(storage) {
 
   return {bootstrap, recover, getSnapshot, subscribe, commit, restore, getSessionEpoch, getRestoreGeneration};
 }
+
+/** Defer browser storage access until the store can handle permission errors. */
+export function createBrowserStore() {
+  return createStore({
+    getItem: key => window.localStorage.getItem(key),
+    setItem: (key, value) => window.localStorage.setItem(key, value),
+    removeItem: key => window.localStorage.removeItem(key),
+  });
+}
