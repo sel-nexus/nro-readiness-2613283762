@@ -6,8 +6,16 @@ import {Icon} from '../components/icons.jsx';
 import {ReadinessTable} from '../components/ReadinessTable.jsx';
 import {ProgramPanels, SiteSchematic} from '../components/ProgramPanels.jsx';
 import {MODEL, MORNING_SCORE_AT} from '../data/register.js';
+import {SCENARIOS} from '../services/sources.js';
 import {authorize, INTENT} from '../utils/access.js';
 import {FILTERS, formatDate, NO_MATCH, RISK_STYLE, selectPortfolio, sitePath} from '../utils/portfolio.js';
+
+const HARBOR = ['NRO-W-1842', 'Harbor Point power blocker'];
+const FOCUS = {
+  A: [['NRO-W-1847', 'Civic Center dispatch'], HARBOR],
+  B: [['NRO-W-1851', 'Lakeside stale permit'], ['NRO-W-1855', 'Market DAS material conflict'],
+    ['NRO-W-1860', 'Hillcrest low confidence'], HARBOR],
+};
 
 /** Display full program KPIs, exception shortcuts and the released-site register. */
 export default function Portfolio({board, actor, query}) {
@@ -43,6 +51,18 @@ export default function Portfolio({board, actor, query}) {
           </Link>
         )}
       </section>
+      {FOCUS[board.scenario] && (
+        <section className="flex flex-wrap items-baseline gap-x-4 gap-y-1" aria-label="Workshop focus">
+          <h2 className="meta font-semibold">{SCENARIOS[board.scenario]} workshop focus</h2>
+          <ul className="flex flex-wrap gap-x-3 gap-y-1 text-meta">
+            {FOCUS[board.scenario].map(([id, label]) => (
+              <li key={id}>
+                <Link className="font-medium text-teal-ink underline-offset-4 hover:underline" to={sitePath(id)}>{label}</Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       <section aria-label="Portfolio totals" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {stats.map(([label, value, qualifier, detail]) => (
           <article className="card p-4" key={label}>

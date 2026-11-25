@@ -1,11 +1,14 @@
 /** Own the route tree, committed-board subscription and cross-page feedback. */
-import {useEffect, useState, useSyncExternalStore} from 'react';
+import {useEffect, useRef, useState, useSyncExternalStore} from 'react';
 import PropTypes from 'prop-types';
 import {BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate, useParams} from 'react-router-dom';
 import {SharedShell} from './components/SharedShell.jsx';
+import {RestoreDialog} from './components/RestoreDialog.jsx';
 import LoginPage from './pages/LoginPage.jsx';
 import Portfolio from './pages/Portfolio.jsx';
+import ServiceHealth from './pages/ServiceHealth.jsx';
 import SiteWorkspace from './pages/SiteWorkspace.jsx';
+import {readSources, RESTORE_TITLE, selectShellHealth} from './services/sources.js';
 import {continueAs, readAccess, resolveRoute, signIn, signOut, switchUser} from './utils/access.js';
 import {createBrowserStore} from './utils/storage.js';
 
@@ -38,6 +41,8 @@ function BoardRoutes({store}) {
   const [boot, setBoot] = useState(null);
   const [query, setQuery] = useState('');
   const [feedback, setFeedback] = useState(null);
+  const [restoreIntent, setRestoreIntent] = useState(null);
+  const restoreOpener = useRef(null);
   const location = useLocation();
   const navigate = useNavigate();
   const actor = readAccess(board);
@@ -59,7 +64,26 @@ function BoardRoutes({store}) {
     if (!result.ok) { notify('error', result.error.message); return; }
     setQuery('');
     setFeedback(null);
+    setRestoreIntent(null);
     navigate(result.data.redirect, {replace: true});
+  }
+
+  /** Open confirmation only for a valid persisted administrator session. */
+  function openRestore(opener) {
+    const intent = store.getRestoreIntent();
+    if (!intent) { notify('error', 'Only the cluster administrator can restore the morning board.'); return; }
+    restoreOpener.current = opener;
+    setRestoreIntent(intent);
+  }
+
+  /** Restore focus to the entry point, or the refreshed board after a reset. */
+  function closeRestore() {
+    const opener = restoreOpener.current;
+    restoreOpener.current = null;
+    setRestoreIntent(null);
+    window.requestAnimationFrame(() => {
+      (opener?.isConnected ? opener : document.getElementById('main-content'))?.focus();
+    });
   }
 
   if (!boot && !board) return (
@@ -68,36 +92,46 @@ function BoardRoutes({store}) {
       {[1, 2, 3, 4, 5].map(row => <div className="h-10 rounded-control bg-line motion-safe:animate-pulse" key={row} />)}
     </main>
   );
-  if (!board) return (
-    <main className="mx-auto max-w-lg p-6">
-      <section className="card space-y-3 p-5" aria-labelledby="board-unavailable">
-        <h1 id="board-unavailable" className="text-title font-semibold text-ink">Board unavailable</h1>
-        <p role="alert">{boot?.error?.message ?? 'Ask the cluster administrator to restore the morning board.'}</p>
-        <button type="button" className="btn" onClick={() => setBoot(store.recover())}>Try again</button>
-      </section>
-    </main>
-  );
-
-  const decision = resolveRoute(location.pathname, actor);
+  const decision = board && resolveRoute(location.pathname, actor);
   if (decision) return <Navigate replace to={decision.to} state={decision.message ? {message: decision.message} : undefined} />;
-  if (!actor) return <LoginPage onSignIn={input => signIn(store, input)} onContinue={id => continueAs(store, id)} />;
-
-  // The recovery slice can supply sourceStatus and onRestore to SharedShell, mount the
-  // same restore dialog here, and replace the authorized Service Health route's header.
+  if (board && !actor) return <LoginPage onSignIn={input => signIn(store, input)} onContinue={id => continueAs(store, id)} />;
+  const sources = board ? readSources(board.program, board.faults) : [];
   return (
-    <SharedShell key={`${store.getSessionEpoch()}:${board.audit.generation}`} board={board} actor={actor} query={query} onQuery={setQuery}
-      onSwitch={id => changeAccess(switchUser(store, id))} onSignOut={() => changeAccess(signOut(store))}>
-      {location.state?.message && <p role="status" className="mb-3 rounded-control border border-line bg-card px-3 py-2">{location.state.message}</p>}
-      <Routes>
-        <Route path="/" element={<Portfolio board={board} actor={actor} query={query} />} />
-        <Route path="/sites/:siteId" element={
-          <ReleasedSite board={board} actor={actor} store={store} notify={notify} />
-        } />
-        <Route path="/service-health" element={
-          <h1 className="text-title font-semibold text-ink">Service health</h1>
-        } />
-        <Route path="*" element={<MissingPage title="Page not found" />} />
-      </Routes>
+    <>
+      {!board ? (
+        <main className="mx-auto max-w-lg p-6">
+          <section className="card space-y-3 p-5" aria-labelledby="board-unavailable">
+            <h1 id="board-unavailable" className="text-title font-semibold text-ink">Board unavailable</h1>
+            <p role="alert">{boot?.error?.message ?? 'Ask the cluster administrator to restore the morning board.'}</p>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className="btn" onClick={() => setBoot(store.recover())}>Try again</button>
+              {store.getRestoreIntent() && (
+                <button type="button" className="btn" onClick={event => openRestore(event.currentTarget)}>{RESTORE_TITLE}…</button>
+              )}
+            </div>
+          </section>
+        </main>
+      ) : (
+        <SharedShell key={`${store.getSessionEpoch()}:${board.audit.generation}`} board={board} actor={actor} query={query} onQuery={setQuery}
+          sourceStatus={selectShellHealth(sources)} onRestore={openRestore}
+          onSwitch={id => changeAccess(switchUser(store, id))} onSignOut={() => changeAccess(signOut(store))}>
+          {location.state?.message && <p role="status" className="mb-3 rounded-control border border-line bg-card px-3 py-2">{location.state.message}</p>}
+          <Routes>
+            <Route path="/" element={<Portfolio board={board} actor={actor} query={query} />} />
+            <Route path="/sites/:siteId" element={
+              <ReleasedSite board={board} actor={actor} store={store} notify={notify} />
+            } />
+            <Route path="/service-health" element={
+              <ServiceHealth board={board} sources={sources} store={store} notify={notify} onRestore={openRestore} />
+            } />
+            <Route path="*" element={<MissingPage title="Page not found" />} />
+          </Routes>
+        </SharedShell>
+      )}
+      {restoreIntent && <RestoreDialog store={store} intent={restoreIntent} onDismiss={closeRestore} onRestored={() => {
+        setQuery('');
+        notify('success', 'Morning snapshot restored');
+      }} />}
       <div aria-live="polite" className="fixed bottom-4 right-4 z-30 max-w-[min(24rem,calc(100vw-2rem))]">
         {feedback && (
           <div className={`card flex items-center gap-3 px-4 py-3 shadow-sm ${feedback.kind === 'error' ? 'text-red' : 'text-teal-ink'}`}>
@@ -106,7 +140,7 @@ function BoardRoutes({store}) {
           </div>
         )}
       </div>
-    </SharedShell>
+    </>
   );
 }
 

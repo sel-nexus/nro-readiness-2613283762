@@ -367,7 +367,20 @@ export function createStore(storage) {
     catch { return null; }
   }
 
-  return {bootstrap, recover, getSnapshot, subscribe, commit, restore, getSessionEpoch, getRestoreGeneration};
+  /** Capture the validated administrator's confirmation fence independently of a locked board. */
+  function getRestoreIntent() {
+    try {
+      const access = read(['users', 'session']);
+      const session = access.session === null ? null : decode(access.session);
+      validateAccess(decode(access.users), session);
+      if (session?.userId !== PERSON.samira || session.role !== 'Facilitator') return null;
+      const expectedGeneration = getRestoreGeneration();
+      return expectedGeneration === null ? null : {expectedGeneration, expectedSessionToken: session.token,
+        expectedSessionEpoch: sessionEpoch};
+    } catch { return null; }
+  }
+
+  return {bootstrap, recover, getSnapshot, subscribe, commit, restore, getSessionEpoch, getRestoreGeneration, getRestoreIntent};
 }
 
 /** Defer browser storage access until the store can handle permission errors. */

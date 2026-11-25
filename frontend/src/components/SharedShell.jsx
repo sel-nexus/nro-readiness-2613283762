@@ -4,7 +4,7 @@ import PropTypes from 'prop-types';
 import {Link, NavLink, useLocation, useNavigate} from 'react-router-dom';
 import {Icon} from './icons.jsx';
 import {accounts, authorize, initials, INTENT} from '../utils/access.js';
-import {formatDate, NO_MATCH, orderedNotices, searchSites, sitePath, sourceSummary} from '../utils/portfolio.js';
+import {formatDate, NO_MATCH, orderedNotices, searchSites, sitePath} from '../utils/portfolio.js';
 
 const searchLabel = 'Search site id or name';
 const dot = {Up: 'bg-teal', Delayed: 'bg-amber', Down: 'bg-red'};
@@ -12,7 +12,7 @@ const dot = {Up: 'bg-teal', Delayed: 'bg-amber', Down: 'bg-red'};
 /** Render signed-in controls and their route-specific search behavior.
  *
  * Args:
- *   sourceStatus: Optional shared health-adapter projection with items and age.
+ *   sourceStatus: Shared health-adapter projection with items and age.
  *   onRestore: Optional callback receiving the opener for the shared restore dialog.
  *   onSwitch, onSignOut: Commit session changes and navigate only on success.
  */
@@ -35,7 +35,7 @@ export function SharedShell({board, actor, query, onQuery, onSwitch, onSignOut, 
   const noticeButton = useRef(null);
   const allNotices = orderedNotices(board.program.notices);
   const unread = allNotices.filter(notice => notice.unread).length;
-  const {items, age} = sourceStatus ?? sourceSummary(board);
+  const {items, age} = sourceStatus;
   const matches = !isPortfolio && lookup.trim() ? searchSites(board.sites, lookup) : [];
   const listOpen = !isPortfolio && suggesting && !!lookup.trim();
 
@@ -269,4 +269,4 @@ export function SharedShell({board, actor, query, onQuery, onSwitch, onSignOut, 
 
 SharedShell.propTypes = {board: PropTypes.object.isRequired, actor: PropTypes.object.isRequired, query: PropTypes.string.isRequired,
   onQuery: PropTypes.func.isRequired, onSwitch: PropTypes.func.isRequired, onSignOut: PropTypes.func.isRequired,
-  onRestore: PropTypes.func, sourceStatus: PropTypes.object, children: PropTypes.node.isRequired};
+  onRestore: PropTypes.func, sourceStatus: PropTypes.object.isRequired, children: PropTypes.node.isRequired};
