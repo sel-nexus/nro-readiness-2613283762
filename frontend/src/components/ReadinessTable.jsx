@@ -26,7 +26,8 @@ export function ReadinessTable({board, sites, sort, onSort}) {
           <thead className="bg-surface text-meta text-muted">
             <tr>
               {columns.map(([label, key]) => (
-                <th key={label} scope="col" className="px-3 py-2 font-semibold" aria-sort={key ? (sort?.key === key ? sort.direction : (!sort && key === 'risk' ? 'ascending' : 'none')) : undefined}>
+                <th key={label} scope="col" className="px-3 py-2 font-semibold"
+                  aria-sort={key ? (sort?.key === key ? sort.direction : (!sort && key === 'risk' ? 'ascending' : 'none')) : undefined}>
                   {key ? (
                     <button className="inline-flex min-h-6 items-center gap-1 rounded-sm hover:underline" type="button" onClick={() => onSort(key)}>
                       {label}
@@ -41,7 +42,8 @@ export function ReadinessTable({board, sites, sort, onSort}) {
             {sites.map(site => {
               const {assessment, lifecycle, plan, risk} = site;
               return (
-                <tr className={`cursor-pointer border-t border-line align-middle ${RISK_STYLE[risk].row}`} key={site.id} onClick={event => rowClick(event, navigate, site.id)}>
+                <tr className={`cursor-pointer border-t border-line align-middle ${RISK_STYLE[risk].row}`} key={site.id}
+                  onClick={event => rowClick(event, navigate, site.id)}>
                   <th scope="row" className="bg-transparent px-3 py-2 font-semibold">
                     <Link to={sitePath(site.id)} className="block whitespace-nowrap text-ink underline-offset-4 hover:underline">{site.name}</Link>
                     <span className="meta whitespace-nowrap font-normal">{site.id}</span>
@@ -49,9 +51,13 @@ export function ReadinessTable({board, sites, sort, onSort}) {
                   <td className="px-3 py-2">{site.neighborhood}</td>
                   <td className="whitespace-nowrap px-3 py-2">
                     {formatDate(lifecycle === 'on_air' ? plan.closedAt : plan.plannedDay)}
-                    {lifecycle === 'on_air' ? <span className="meta block">On air</span> : plan.plannedDay && <span className="meta block">{relativeDay(plan.plannedDay)}</span>}
+                    {lifecycle === 'on_air'
+                      ? <span className="meta block">On air</span>
+                      : plan.plannedDay && <span className="meta block">{relativeDay(plan.plannedDay)}</span>}
                   </td>
-                  <td className="px-3 py-2 font-semibold">{lifecycle === 'on_air' ? '—' : assessment?.probability == null ? 'Unavailable' : `${assessment.probability}%`}</td>
+                  <td className="px-3 py-2 font-semibold">
+                    {lifecycle === 'on_air' ? '—' : assessment?.probability == null ? 'Unavailable' : `${assessment.probability}%`}
+                  </td>
                   <td className="px-3 py-2">{assessment?.confidence == null ? '—' : `${assessment.confidence}%`}</td>
                   <td className="px-3 py-2">
                     <span className={`badge ${RISK_STYLE[risk].badge}`}>

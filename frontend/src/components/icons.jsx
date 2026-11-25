@@ -21,7 +21,8 @@ const paths = {
 /** Render a decorative glyph; the surrounding control provides the accessible name. */
 export function Icon({name, className}) {
   return (
-    <svg aria-hidden="true" className={className} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <svg aria-hidden="true" className={className} width="16" height="16" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <path d={paths[name]} />
     </svg>
   );

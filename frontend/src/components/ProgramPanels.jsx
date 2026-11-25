@@ -12,11 +12,14 @@ export function SiteSchematic({sites}) {
       <p className="meta mt-1">{sites.length} visible sites</p>
       <svg className="mx-auto mt-3 w-full max-w-xs rounded-control border border-line bg-surface" viewBox="0 0 100 100" aria-label="West Metro site positions">
         <path aria-hidden="true" d="M20 0v100M40 0v100M60 0v100M80 0v100M0 20h100M0 40h100M0 60h100M0 80h100" className="stroke-line" strokeWidth=".3" />
-        <path aria-hidden="true" d="M7 0 12 23 27 42 32 66 21 100M0 61l30-14 38-10 32 4M0 79l38 6 23-4 39-18" className="fill-none stroke-line" strokeWidth="1" />
+        <path aria-hidden="true" d="M7 0 12 23 27 42 32 66 21 100M0 61l30-14 38-10 32 4M0 79l38 6 23-4 39-18"
+          className="fill-none stroke-line" strokeWidth="1" />
         {sites.map(({id, name, risk, x, y}) => (
           <Link key={id} to={sitePath(id)} aria-label={`${name} · ${id} · ${risk}`} className={`group ${RISK_STYLE[risk].ink}`}>
             <title>{name} · {risk}</title>
-            <circle cx={x} cy={y} r="2.9" className="fill-card stroke-current opacity-80 group-hover:opacity-100 group-focus-visible:opacity-100" strokeWidth=".28" />
+            <circle cx={x} cy={y} r="2.9"
+              className="fill-card stroke-current opacity-80 group-hover:opacity-100 group-focus-visible:opacity-100"
+              strokeWidth=".28" />
             {risk === 'Green' && <circle cx={x} cy={y} r="1.4" fill="currentColor" />}
             {risk === 'Amber' && <path transform={`translate(${x} ${y})`} d="M0-1.9 1.9 0 0 1.9-1.9 0Z" fill="currentColor" />}
             {risk === 'Red' && <rect x={x - 1.35} y={y - 1.35} width="2.7" height="2.7" fill="currentColor" />}

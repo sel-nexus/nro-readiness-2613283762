@@ -8,6 +8,7 @@ import {EvidenceMatrix} from '../components/EvidenceMatrix.jsx';
 import {FieldStrip} from '../components/FieldStrip.jsx';
 import {PredictionPanel} from '../components/PredictionPanel.jsx';
 import {Recommendation} from '../components/Recommendation.jsx';
+import {Icon} from '../components/icons.jsx';
 import {BOARD_AT, SUPPLIERS} from '../data/register.js';
 import {formatDate, personName, RISK_STYLE, sitePath} from '../utils/portfolio.js';
 import {confidenceBand, deriveReadiness} from '../utils/readiness.js';
@@ -68,7 +69,10 @@ export default function SiteWorkspace({board, site, actor, store, notify}) {
             <h1>{site.name}</h1>
             <p className="text-muted">{site.neighborhood}</p>
           </div>
-          <span className={`badge ${RISK_STYLE[risk].badge}`}>{risk}</span>
+          <span className={`badge ${RISK_STYLE[risk].badge}`}>
+            <Icon name={risk} />
+            {risk}
+          </span>
         </div>
         <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" id="site-plan" tabIndex={-1}>
           <div>
@@ -104,11 +108,12 @@ export default function SiteWorkspace({board, site, actor, store, notify}) {
           </ul>
         </section>
       )}
-      <div role="tablist" aria-label="Site workspace" className="flex overflow-x-auto border-b border-line bg-card">
+      <div role="tablist" aria-label="Site workspace" className="flex flex-wrap border-b border-line bg-card">
         {TABS.map(([key, label]) => (
           <button key={key} type="button" role="tab" id={`tab-${key}`} aria-controls="workspace-pane" aria-selected={key === tab}
             tabIndex={key === tab ? 0 : -1} onKeyDown={moveTab} onClick={() => navigate(`${sitePath(site.id)}?tab=${key}`)}
-            className={`shrink-0 whitespace-nowrap border-b-2 px-3 py-3 font-medium ${tab === key ? 'border-teal text-teal-ink' : 'border-transparent text-muted hover:bg-surface'}`}>
+            className={`shrink-0 whitespace-nowrap border-b-2 px-3 py-3 font-medium ${
+              tab === key ? 'border-teal text-teal-ink' : 'border-transparent text-muted hover:bg-surface'}`}>
             {label}{key === 'audit' ? ` (${auditCount})` : ''}
           </button>
         ))}

@@ -49,7 +49,8 @@ function EvidenceEditor({row, onClose, onSave}) {
   }
 
   return (
-    <dialog ref={dialog} aria-modal="true" aria-labelledby="edit-evidence-title" className="card fixed inset-y-0 left-auto right-0 m-0 h-dvh max-h-none w-full max-w-md p-5"
+    <dialog ref={dialog} aria-modal="true" aria-labelledby="edit-evidence-title"
+      className="card fixed inset-y-0 left-auto right-0 m-0 h-dvh max-h-none w-full max-w-md p-5"
       onCancel={event => { event.preventDefault(); onClose(); }} onClick={event => {
         if (event.target !== event.currentTarget) return;
         const {left, right, top, bottom} = event.currentTarget.getBoundingClientRect();
@@ -141,7 +142,9 @@ export function EvidenceMatrix({board, site, actor, store, readiness, notify, ta
           <caption>Evidence matrix</caption>
           <thead>
             <tr>
-              {['Prerequisite', 'Status', 'Quality', 'Source', 'Source time', 'Freshness', 'Owner', 'Update'].map(label => <th key={label} scope="col">{label}</th>)}
+              {['Prerequisite', 'Status', 'Quality', 'Source', 'Source time', 'Freshness', 'Owner', 'Update'].map(label => (
+                <th key={label} scope="col">{label}</th>
+              ))}
             </tr>
           </thead>
           <tbody>
@@ -162,14 +165,19 @@ export function EvidenceMatrix({board, site, actor, store, readiness, notify, ta
                       <summary className="cursor-pointer font-medium text-teal-ink" data-evidence-target id={`evidence-${key}`}>{row.source}</summary>
                       <p className="meta mt-1">Ingested: {row.ingestedAt ? formatDate(row.ingestedAt, true) : 'No timestamp'}</p>
                       {row.observations.map((item, i) => (
-                        <p key={i}>{item.source} · {item.status} · {item.sourceAt ? formatDate(item.sourceAt, true) : 'No timestamp'}{item.ingestedAt ? ` · Ingested ${formatDate(item.ingestedAt, true)}` : ''}</p>
+                        <p key={i}>
+                          {item.source} · {item.status} · {item.sourceAt ? formatDate(item.sourceAt, true) : 'No timestamp'}
+                          {item.ingestedAt ? ` · Ingested ${formatDate(item.ingestedAt, true)}` : ''}
+                        </p>
                       ))}
                       {row.detail && <p className="mt-1">{row.detail}</p>}
                     </details>
                     {rowDocs.map(doc => (
                       <details key={doc.id} className="mt-2 max-w-[25ch] break-words">
                         <summary className="cursor-pointer text-teal-ink" data-evidence-target id={doc.id}>{doc.fileName}</summary>
-                        <p className="meta">{doc.sizeBytes.toLocaleString('en-GB')} bytes · {doc.mediaType} · {personName(board, doc.addedBy)} · {formatDate(doc.addedAt, true)}</p>
+                        <p className="meta">
+                          {doc.sizeBytes.toLocaleString('en-GB')} bytes · {doc.mediaType} · {personName(board, doc.addedBy)} · {formatDate(doc.addedAt, true)}
+                        </p>
                         {doc.extractedText && <p className="mt-1">{doc.extractedText}</p>}
                       </details>
                     ))}
@@ -192,7 +200,11 @@ export function EvidenceMatrix({board, site, actor, store, readiness, notify, ta
                       <div className="mt-2">
                         <input className="peer sr-only" type="file" id={`attach-${key}`} aria-label={`Attach evidence to ${key}`}
                           accept=".pdf,.png,.jpg" onChange={event => attach(event, key)} />
-                        <label className="cursor-pointer text-teal-ink peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-focus" htmlFor={`attach-${key}`}>Attach evidence</label>
+                        <label
+                          className="cursor-pointer text-teal-ink peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-focus"
+                          htmlFor={`attach-${key}`}>
+                          Attach evidence
+                        </label>
                       </div>
                     )}
                   </td>

@@ -227,3 +227,178 @@ test('marker allocation failure leaves the existing board and storage untouched'
   assert.strictEqual(store.getSnapshot(), snapshot);
   assert.deepEqual(storage.data, before);
 });
+
+/** Interrupt one numbered set operation, or the journal removal, at the requested boundary. */
+function interruptAt(storage, store, operation, nth, phase) {
+  const visited = [];
+  const interrupted = [];
+  let count = 0;
+  storage.fault = (op, rawKey, stage) => {
+    if (stage === 'after') visited.push(store.getSnapshot());
+    if (op === operation && stage === phase && ++count === nth) {
+      interrupted.push(rawKey);
+      throw new Error('Injected storage interruption');
+    }
+  };
+  return {visited, interrupted};
+}
+
+const pending = key('pendingCommit');
+const commitWrites = ['pendingCommit', 'scenario', 'faults', 'audit'];
+const restoreWrites = ['pendingCommit', ...BOARD_KEYS];
+
+for (const phase of ['before', 'after']) {
+  for (const [operation, nth, name] of [...commitWrites.map((name, i) => ['set', i + 1, name]), ['remove', 1, 'pendingCommit']]) {
+    test(`commit ${phase} ${operation} #${nth} (${name}) rolls back exact bytes and never publishes`, () => {
+      const {storage, store} = opened();
+      storage.setItem('unrelated.preference', 'leave alone');
+      for (const name of ['scenario', 'faults', 'audit']) storage.setItem(key(name), ` \n${storage.getItem(key(name))}\t`);
+      const before = new Map(storage.data);
+      const snapshot = store.getSnapshot();
+      const published = [];
+      store.subscribe(() => published.push(store.getSnapshot()));
+      const {visited, interrupted} = interruptAt(storage, store, operation, nth, phase);
+
+      const result = store.commit({commandId: 'interrupted', intentKey: 'change-scenario-and-faults'},
+        {writes: {scenario: 'D', faults: {...snapshot.faults, assessmentDown: true}}, result: 'changed'});
+
+      assert.equal(result.error.code, 'STORAGE_WRITE');
+      assert.deepEqual(interrupted, [key(name)]);
+      for (const observed of visited) assert.strictEqual(observed, snapshot);
+      assert.deepEqual(published, []);
+      assert.strictEqual(store.getSnapshot(), snapshot);
+      assert.deepEqual(storage.data, before);
+      const reloaded = createStore(storage);
+      assert.equal(reloaded.bootstrap().ok, true);
+      assert.deepEqual(reloaded.getSnapshot(), snapshot);
+      assert.deepEqual(storage.data, before);
+    });
+  }
+
+  for (const [operation, nth, name] of [...restoreWrites.map((name, i) => ['set', i + 1, name]), ['remove', 1, 'pendingCommit']]) {
+    test(`restore ${phase} ${operation} #${nth} (${name}) publishes no mixed board and reloads the right generation`, () => {
+      const {storage, store} = opened();
+      assert.equal(store.commit({commandId: 'dirty', intentKey: 'dirty'},
+        {writes: {scenario: 'D', faults: {...store.getSnapshot().faults, assessmentDown: true}}}).ok, true);
+      // Whitespace distinguishes rewritten baseline records from identical decoded values.
+      for (const name of [...BOARD_KEYS, 'users', 'session']) storage.setItem(key(name), ` \n${storage.getItem(key(name))}\t`);
+      storage.setItem('unrelated.preference', 'leave alone');
+      const before = new Map(storage.data);
+      const snapshot = store.getSnapshot();
+      const published = [];
+      store.subscribe(() => published.push(store.getSnapshot()));
+      const {visited, interrupted} = interruptAt(storage, store, operation, nth, phase);
+      const command = {commandId: 'interrupted-restore', confirmed: true, expectedGeneration: 0};
+
+      const result = store.restore(command);
+
+      const notStarted = operation === 'set' && nth === 1 && phase === 'before';
+      assert.equal(result.error.code, notStarted ? 'STORAGE_WRITE' : 'RECOVERY_REQUIRED');
+      assert.deepEqual(interrupted, [key(name)]);
+      for (const observed of visited) assert.strictEqual(observed, snapshot);
+      assert.deepEqual(published, notStarted ? [] : [null]);
+      assert.strictEqual(store.getSnapshot(), notStarted ? snapshot : null);
+
+      const baseline = makeBaseline();
+      baseline.audit.generation = 1;
+      const interim = new Map(before);
+      if (!notStarted) {
+        const written = operation === 'remove' ? BOARD_KEYS.length : nth - (phase === 'after' ? 1 : 2);
+        for (const name of BOARD_KEYS.slice(0, Math.max(0, written))) interim.set(key(name), envelope(baseline[name]));
+        if (operation !== 'remove' || phase !== 'after') {
+          const prior = Object.fromEntries(BOARD_KEYS.map(name => [name, before.get(key(name))]));
+          const journal = {schemaVersion: 1, commandId: command.commandId, mode: 'restore', keys: BOARD_KEYS, prior, targetGeneration: 1};
+          assert.deepEqual(JSON.parse(storage.getItem(pending)), journal);
+          interim.set(pending, storage.getItem(pending));
+        }
+      }
+      assert.deepEqual(storage.data, interim);
+
+      const expectedRaw = new Map(before);
+      if (!notStarted) for (const name of BOARD_KEYS) expectedRaw.set(key(name), envelope(baseline[name]));
+      const expectedBoard = notStarted ? snapshot : {...baseline, users: snapshot.users, session: snapshot.session};
+      storage.fault = () => {};
+      const reloaded = createStore(storage);
+      assert.equal(reloaded.getSnapshot(), null);
+      const reloadPublications = [];
+      reloaded.subscribe(() => reloadPublications.push({board: reloaded.getSnapshot(), raw: new Map(storage.data)}));
+      assert.equal(reloaded.bootstrap().ok, true);
+      assert.equal(reloaded.recover().ok, true);
+      assert.deepEqual(reloadPublications, [{board: expectedBoard, raw: expectedRaw}]);
+      assert.deepEqual(storage.data, expectedRaw);
+    });
+  }
+}
+
+test('an incomplete rollback stays locked across reload until every prior byte can be restored', () => {
+  const {storage, store} = opened();
+  storage.setItem(key('scenario'), ` \n${storage.getItem(key('scenario'))}`);
+  const before = new Map(storage.data);
+  const snapshot = store.getSnapshot();
+  const notifications = [];
+  store.subscribe(() => notifications.push(store.getSnapshot()));
+  let scenarioWritten = false;
+  storage.fault = (op, rawKey, phase) => {
+    if (op !== 'set') return;
+    if (rawKey === key('scenario') && phase === 'after') scenarioWritten = true;
+    if (scenarioWritten && phase === 'before') throw new Error('Write and rollback interrupted');
+  };
+  assert.equal(store.commit({commandId: 'incomplete'},
+    {writes: {scenario: 'D', faults: {...snapshot.faults, assessmentDown: true}}}).error.code, 'RECOVERY_REQUIRED');
+  assert.deepEqual(notifications, [null]);
+  assert.equal(store.getSnapshot(), null);
+  const journal = storage.getItem(pending);
+  assert.deepEqual(JSON.parse(journal), {schemaVersion: 1, commandId: 'incomplete', mode: 'rollback',
+    keys: ['scenario', 'faults'], prior: {scenario: before.get(key('scenario')), faults: before.get(key('faults'))}, targetGeneration: null});
+
+  const interrupted = new Map(before).set(key('scenario'), envelope('D')).set(pending, journal);
+  assert.deepEqual(storage.data, interrupted);
+  const reloaded = createStore(storage);
+  const published = [];
+  reloaded.subscribe(() => published.push({board: reloaded.getSnapshot(), raw: new Map(storage.data)}));
+  assert.equal(reloaded.bootstrap().error.code, 'RECOVERY_REQUIRED');
+  assert.equal(reloaded.getSnapshot(), null);
+  assert.deepEqual(published, []);
+  assert.deepEqual(storage.data, interrupted);
+  storage.fault = () => {};
+  assert.equal(reloaded.recover().ok, true);
+  assert.deepEqual(published, [{board: snapshot, raw: before}]);
+  assert.deepEqual(storage.data, before);
+});
+
+const validJournal = {schemaVersion: 1, commandId: 'corrupt', mode: 'rollback', keys: ['scenario'],
+  prior: {scenario: envelope('D')}, targetGeneration: null};
+for (const [label, raw] of [
+  ['malformed JSON', '{broken'],
+  ['unknown schema version', JSON.stringify({...validJournal, schemaVersion: 2})],
+  ['unknown mode', JSON.stringify({...validJournal, mode: 'unknown'})],
+  ['unknown key', JSON.stringify({...validJournal, keys: ['unrecognized'], prior: {unrecognized: null}})],
+  ['duplicate keys', JSON.stringify({...validJournal, keys: ['scenario', 'scenario']})],
+  ['missing prior entry', JSON.stringify({...validJournal, prior: {faults: null}})],
+  ['non-raw prior value', JSON.stringify({...validJournal, prior: {scenario: {value: 'D'}}})],
+  ['incomplete restore footprint', JSON.stringify({...validJournal, mode: 'restore', targetGeneration: 1})],
+  ['invalid restore generation', JSON.stringify({...validJournal, mode: 'restore', targetGeneration: 0, keys: BOARD_KEYS,
+    prior: Object.fromEntries(BOARD_KEYS.map(name => [name, null]))})],
+]) {
+  test(`corrupt journal (${label}) locks the board without applying or deleting any raw records`, () => {
+    const {storage, store} = opened();
+    storage.setItem(pending, raw);
+    storage.setItem('unrelated.preference', 'leave alone');
+    const before = new Map(storage.data);
+    const mutations = [];
+    storage.fault = (op, rawKey, phase) => { if (phase === 'before') mutations.push([op, rawKey]); };
+    const published = [];
+    store.subscribe(() => published.push(store.getSnapshot()));
+    assert.equal(store.recover().error.code, 'RECOVERY_REQUIRED');
+    assert.equal(store.getSnapshot(), null);
+    assert.deepEqual(published, [null]);
+
+    const reloaded = createStore(storage);
+    reloaded.subscribe(() => published.push(reloaded.getSnapshot()));
+    assert.equal(reloaded.bootstrap().error.code, 'RECOVERY_REQUIRED');
+    assert.equal(reloaded.getSnapshot(), null);
+    assert.deepEqual(published, [null]);
+    assert.deepEqual(mutations, []);
+    assert.deepEqual(storage.data, before);
+  });
+}

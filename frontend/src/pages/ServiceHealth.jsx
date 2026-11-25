@@ -96,7 +96,11 @@ export default function ServiceHealth({board, sources, store, notify, onRestore}
               {Object.entries(SCENARIOS).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
             </select>
             <p className="meta">Changing scenarios keeps working records and manual source settings.</p>
-            {board.scenario === 'D' && <p className="meta">The interruption also applies its own outages. Leave this scenario to remove them; Retry can recover assessment separately.</p>}
+            {board.scenario === 'D' && (
+              <p className="meta">
+                The interruption also applies its own outages. Leave this scenario to remove them; Retry can recover assessment separately.
+              </p>
+            )}
             {board.scenario === 'C' && <Link className="font-medium text-teal-ink underline" to={PORTSIDE_APPROVAL}>Open Portside approval</Link>}
           </section>
         </div>

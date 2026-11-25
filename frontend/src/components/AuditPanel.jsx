@@ -69,7 +69,11 @@ export function AuditPanel({board, site}) {
                               <li key={row.row}>
                                 <p>{row.row} · {row.status} · {row.quality} · {row.source}</p>
                                 {row.observations.length > 1 && row.observations.map((observation, index) => (
-                                  <p key={index} className="meta pl-3">{observation.source} · {observation.status} · {observation.sourceAt ? formatDate(observation.sourceAt, true) : 'No timestamp'}</p>
+                                  <p key={index} className="meta pl-3">
+                                    {observation.source} · {observation.status} · {observation.sourceAt
+                                      ? formatDate(observation.sourceAt, true)
+                                      : 'No timestamp'}
+                                  </p>
                                 ))}
                               </li>
                             ))}

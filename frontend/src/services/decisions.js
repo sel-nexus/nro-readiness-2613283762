@@ -40,11 +40,61 @@ export function rank(site, readiness) {
 export const approvalDenialReason = actor => `Only the program manager can approve a supplier or schedule change. You are signed in as ${actor.title}.`;
 
 /** Identify a review fence without accepting client-supplied write keys. */
-function command(input, key, authorizeCommand) {
+function command(input, key, authorizeCommand, intentKey = JSON.stringify([
+  key, input.siteId, input.expectedSiteRev, input.proposalId ?? null, input.optionId ?? null, input.row ?? null,
+  input.expectedFaultRev ?? null, input.reviewedAssignmentRev ?? null,
+])) {
   const {commandId, siteId, expectedSiteRev, expectedGeneration, expectedSessionEpoch, expectedSessionToken} = input;
   return {commandId, siteId, expectedSiteRev, expectedGeneration, expectedSessionEpoch, expectedSessionToken,
-    intentKey: JSON.stringify([key, siteId, expectedSiteRev, input.proposalId ?? null, input.optionId ?? null, input.row ?? null,
-      input.expectedFaultRev ?? null, input.reviewedAssignmentRev ?? null]), authorize: authorizeCommand};
+    intentKey, authorize: authorizeCommand};
+}
+
+const SHA256_ROUNDS = [
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+];
+
+/** Rotate a SHA-256 word right without changing its bit pattern. */
+const rotateRight = (word, bits) => (word >>> bits) | (word << (32 - bits));
+
+/** Digest a normalized identity synchronously, including in non-secure workshop origins. */
+function decisionDigest(identity) {
+  const bytes = new TextEncoder().encode(JSON.stringify(identity));
+  const padded = new Uint8Array(Math.ceil((bytes.length + 9) / 64) * 64);
+  padded.set(bytes);
+  padded[bytes.length] = 0x80;
+  const view = new DataView(padded.buffer);
+  view.setBigUint64(padded.length - 8, BigInt(bytes.length) * 8n);
+  const state = new Uint32Array([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]);
+  const words = new Uint32Array(64);
+  for (let offset = 0; offset < padded.length; offset += 64) {
+    for (let i = 0; i < 16; i++) words[i] = view.getUint32(offset + i * 4);
+    for (let i = 16; i < 64; i++) {
+      const x = words[i - 15];
+      const y = words[i - 2];
+      const low = rotateRight(x, 7) ^ rotateRight(x, 18) ^ (x >>> 3);
+      const high = rotateRight(y, 17) ^ rotateRight(y, 19) ^ (y >>> 10);
+      words[i] = words[i - 16] + low + words[i - 7] + high;
+    }
+    let [a, b, c, d, e, f, g, h] = state;
+    for (let i = 0; i < 64; i++) {
+      const choose = (e & f) ^ (~e & g);
+      const majority = (a & b) ^ (a & c) ^ (b & c);
+      const sigmaE = rotateRight(e, 6) ^ rotateRight(e, 11) ^ rotateRight(e, 25);
+      const sigmaA = rotateRight(a, 2) ^ rotateRight(a, 13) ^ rotateRight(a, 22);
+      const t1 = h + sigmaE + choose + SHA256_ROUNDS[i] + words[i];
+      const t2 = sigmaA + majority;
+      [a, b, c, d, e, f, g, h] = [(t1 + t2) >>> 0, a, b, c, (d + t1) >>> 0, e, f, g];
+    }
+    [a, b, c, d, e, f, g, h].forEach((word, i) => { state[i] += word; });
+  }
+  return `decision:sha256:${Array.from(state, word => word.toString(16).padStart(8, '0')).join('')}`;
 }
 
 /** Require a captured site, generation and access context for a write. */
@@ -201,31 +251,41 @@ export function decide(store, input = {}) {
     return recordApprovalDenial(store, {commandId, siteId, expectedSiteRev, expectedGeneration, expectedSessionEpoch,
       expectedSessionToken, proposalId, optionId, attempt: verb});
   }
-  return store.commit(command(input, verb, (_board, liveActor) => authorize(liveActor, verb)), (board, liveActor) => {
+  const applies = verb === 'approve' || verb === 'override';
+  const modified = verb === 'modify';
+  const rationale = typeof input.rationale === 'string' ? input.rationale.trim() : '';
+  const note = modified && typeof input.note === 'string' ? input.note.trim() : null;
+  const dueDay = modified && typeof input.dueDay === 'string' ? input.dueDay : null;
+  const ownerId = modified && typeof input.ownerId === 'string' ? input.ownerId : null;
+  const confidenceReviewed = applies && input.confidenceReviewed === true;
+  const {commandId, siteId, expectedSiteRev, proposalId, optionId, reviewKey, expectedFaultRev, reviewedAssignmentRev} = input;
+  const intentKey = decisionDigest([typeof commandId === 'string' ? commandId : false, verb, siteId, expectedSiteRev,
+    typeof proposalId === 'string' ? proposalId : false, typeof optionId === 'string' ? optionId : optionId == null ? null : false,
+    typeof reviewKey === 'string' ? reviewKey : false, Number.isSafeInteger(expectedFaultRev) ? expectedFaultRev : false,
+    Number.isSafeInteger(reviewedAssignmentRev) ? reviewedAssignmentRev : reviewedAssignmentRev == null ? null : false,
+    confidenceReviewed, rationale, ownerId, dueDay, note]);
+  return store.commit(command(input, verb, (_board, liveActor) => authorize(liveActor, verb), intentKey), (board, liveActor) => {
     const site = board.sites[input.siteId];
     const review = previewApproval(site, input.optionId);
     if (!review.eligible || review.proposalId !== input.proposalId || review.reviewKey !== input.reviewKey
       || board.faults.rev !== input.expectedFaultRev) return commandError('STALE_INTENT', STALE);
-    const rationale = typeof input.rationale === 'string' ? input.rationale.trim() : '';
-    if (rationale.length < 12) return commandError('BAD_RATIONALE', 'Enter a rationale of at least 12 characters.');
-    const applies = verb === 'approve' || verb === 'override';
+    const length = [...rationale].length;
+    if (length < 12) return commandError('BAD_RATIONALE', 'Enter a rationale of at least 12 characters.');
+    if (length > 1000) return commandError('BAD_RATIONALE', 'Enter a rationale of at most 1000 characters.');
     const readiness = readinessFor(board, site);
     const needsReview = readiness.confidence == null || readiness.reviewRequired;
-    if (applies && needsReview && input.confidenceReviewed !== true) {
+    if (applies && needsReview && !confidenceReviewed) {
       return commandError('REVIEW_REQUIRED', 'Confirm that you reviewed the evidence and confidence.');
     }
     const assignment = review.scope.assignmentId && board.program.crew.find(item => item.id === review.scope.assignmentId && item.siteId === site.id);
     if (applies && review.scope.assignmentId && (!assignment || assignment.rev !== input.reviewedAssignmentRev)) {
       return commandError('STALE_INTENT', STALE);
     }
-    const modified = verb === 'modify';
-    const dueDay = modified ? input.dueDay : null;
-    const note = modified && typeof input.note === 'string' ? input.note.trim() : null;
-    const ownerId = modified ? input.ownerId : null;
     if (modified && (!(Object.hasOwn(USERS, ownerId) || Object.hasOwn(DIRECTORY, ownerId))
       || !Number.isFinite(civilMillis(`${dueDay}T00:00:00`)) || dueDay < BOARD_AT.slice(0, 10) || !note)) {
       return commandError('BAD_MODIFICATION', 'Choose an owner and valid due date, and enter a short note.');
     }
+    if (modified && [...note].length > 1000) return commandError('BAD_MODIFICATION', 'Enter a note of at most 1000 characters.');
     const after = applies ? review.after : review.before;
     const changed = Object.keys(after).some(key => after[key] !== site.plan[key]);
     const disposition = applies ? `Approved — ${review.scope.kind}` : modified ? 'Modified' : 'Rejected';
@@ -235,7 +295,7 @@ export function decide(store, input = {}) {
     const decision = {id, proposalId: review.proposalId, optionId: review.optionId, verb, actorId: liveActor.id, at: BOARD_AT,
       rationale, scope: review.scope, before: review.before, after, effectivePlanRev: site.planRev + Number(changed),
       assessmentRef: context.snapshotId, workflowId, ownerId, dueDay, note, disposition, priorDisposition: site.disposition,
-      confidenceReviewed: applies && needsReview && input.confidenceReviewed === true, reviewedEvidenceRev: site.evidenceRev,
+      confidenceReviewed: needsReview && confidenceReviewed, reviewedEvidenceRev: site.evidenceRev,
       reviewedAssignmentRev: assignment?.rev ?? null};
     const next = {...site, rev: site.rev + 1, planRev: decision.effectivePlanRev, plan: after,
       scoreState: changed ? 'needs_rescore' : site.scoreState, disposition,

@@ -42,7 +42,9 @@ export default function Portfolio({board, actor, query}) {
       <section className="flex flex-wrap items-start justify-between gap-3" aria-labelledby="portfolio-title">
         <div>
           <h1 id="portfolio-title" className="text-title font-semibold text-ink">{program.cluster}</h1>
-          <p className="meta mt-1">{model.total} sites on the board · {program.design.length} still in design · scored {formatDate(MORNING_SCORE_AT, true)} with {MODEL}.</p>
+          <p className="meta mt-1">
+            {model.total} sites on the board · {program.design.length} still in design · scored {formatDate(MORNING_SCORE_AT, true)} with {MODEL}.
+          </p>
         </div>
         {(authorize(actor, INTENT.evidence) || authorize(actor, INTENT.approve)) && (
           <Link className="btn btn-primary" to={sitePath('NRO-W-1842')}>
@@ -82,9 +84,19 @@ export default function Portfolio({board, actor, query}) {
               <h2 id="readiness-trend" className="text-base font-semibold text-ink">Portfolio readiness</h2>
               <p className="meta">Share of the board at green.</p>
             </div>
-            <svg role="img" aria-label={`14-day Green share trend: ${program.trend.map(entry => `${entry.greenShare}%`).join(', ')}`} viewBox="0 0 130 40" className="h-12 w-32 shrink-0">
+            <svg
+              role="img"
+              aria-label={`14-day Green share trend: ${program.trend.map(entry => `${entry.greenShare}%`).join(', ')}`}
+              viewBox="0 0 130 40"
+              className="h-12 w-32 shrink-0"
+            >
               <path aria-hidden="true" d="M0 34H130M0 10H130" className="stroke-line" />
-              <polyline points={program.trend.map((entry, index) => `${2 + index * 9.7},${82 - entry.greenShare}`).join(' ')} className="fill-none stroke-teal" strokeWidth="2" strokeLinejoin="round" />
+              <polyline
+                points={program.trend.map((entry, index) => `${2 + index * 9.7},${82 - entry.greenShare}`).join(' ')}
+                className="fill-none stroke-teal"
+                strokeWidth="2"
+                strokeLinejoin="round"
+              />
             </svg>
           </div>
           <div aria-hidden="true" className="mt-3 flex h-2 gap-0.5 overflow-hidden rounded-full">
@@ -104,7 +116,18 @@ export default function Portfolio({board, actor, query}) {
           <ul className="mt-2 grid gap-2 sm:grid-cols-2">
             {model.exceptions.map(group => (
               <li key={group.id} className="min-w-0">
-                <button type="button" className={`rounded-control border px-2 py-1 font-semibold ${exception === group.id ? 'border-teal bg-green-wash text-teal-ink' : 'border-transparent text-ink hover:bg-surface'}`} aria-pressed={exception === group.id} onClick={() => { setChip('All'); setException(exception === group.id ? null : group.id); }}>{group.sites.length} {group.label}</button>
+                <button
+                  type="button"
+                  className={`rounded-control border px-2 py-1 font-semibold ${
+                    exception === group.id ? 'border-teal bg-green-wash text-teal-ink' : 'border-transparent text-ink hover:bg-surface'}`}
+                  aria-pressed={exception === group.id}
+                  onClick={() => {
+                    setChip('All');
+                    setException(exception === group.id ? null : group.id);
+                  }}
+                >
+                  {group.sites.length} {group.label}
+                </button>
                 <ul className="flex flex-wrap gap-x-2 px-2 text-meta">
                   {group.sites.map(site => (
                     <li key={site.id}>
@@ -120,10 +143,24 @@ export default function Portfolio({board, actor, query}) {
       <section aria-label="Released-site filters" className="space-y-2">
         <div className="flex flex-wrap gap-2">
           {FILTERS.map(label => (
-            <button key={label} type="button" aria-pressed={!exception && chip === label} className={`rounded-full border px-3 py-1 text-meta font-semibold ${!exception && chip === label ? 'border-teal bg-green-wash text-teal-ink' : 'border-line bg-card text-ink hover:border-muted'}`} onClick={() => { setChip(label); setException(null); }}>{label}</button>
+            <button
+              key={label}
+              type="button"
+              aria-pressed={!exception && chip === label}
+              className={`rounded-full border px-3 py-1 text-meta font-semibold ${
+                !exception && chip === label ? 'border-teal bg-green-wash text-teal-ink' : 'border-line bg-card text-ink hover:border-muted'}`}
+              onClick={() => {
+                setChip(label);
+                setException(null);
+              }}
+            >
+              {label}
+            </button>
           ))}
         </div>
-        <p role="status" className="meta">Showing {model.visible.length} of {model.total} sites.{!model.visible.length && query.trim() ? ` ${NO_MATCH}` : ''}</p>
+        <p role="status" className="meta">
+          Showing {model.visible.length} of {model.total} sites.{!model.visible.length && query.trim() ? ` ${NO_MATCH}` : ''}
+        </p>
       </section>
       <div className="grid items-start gap-4 min-[1560px]:grid-cols-[minmax(0,1fr)_230px]">
         <ReadinessTable board={board} sites={model.visible} sort={sort} onSort={changeSort} />

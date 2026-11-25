@@ -42,8 +42,14 @@ export function Recommendation({board, site, actor, store, readiness, notify}) {
           {ranked.map(item => (
             <li key={item.row} className="grid gap-1 py-2 sm:grid-cols-2">
               <p className="font-medium">{KINDS[item.kind]} · {item.row} · {item.status} ({item.quality})</p>
-              <p className="text-muted">{personName(board, item.ownerId)} · {(board.users[item.ownerId] ?? DIRECTORY[item.ownerId])?.phone ?? 'Phone unavailable'}</p>
-              <p className="meta sm:col-span-2">Estimated resolution: {item.window ?? (item.dueDay ? `Follow up by ${formatDate(item.dueDay)}${item.dueTime ? ` ${item.dueTime}` : ''}` : 'Unavailable')}</p>
+              <p className="text-muted">
+                {personName(board, item.ownerId)} · {(board.users[item.ownerId] ?? DIRECTORY[item.ownerId])?.phone ?? 'Phone unavailable'}
+              </p>
+              <p className="meta sm:col-span-2">
+                Estimated resolution: {item.window ?? (item.dueDay
+                  ? `Follow up by ${formatDate(item.dueDay)}${item.dueTime ? ` ${item.dueTime}` : ''}`
+                  : 'Unavailable')}
+              </p>
             </li>
           ))}
         </ol>
@@ -51,10 +57,21 @@ export function Recommendation({board, site, actor, store, readiness, notify}) {
       {active && proposal && (
         <div className="space-y-2">
           <h3 className="font-semibold">Next-best action</h3>
-          <p className="font-medium">{newBlocker ? `Follow up on ${newBlocker.row}` : `${proposal.state === 'Rejected' ? 'Rejected by Priya Raman' : proposal.state} · ${proposal.impact}`}</p>
-          <p>Owner: {personName(board, newBlocker?.ownerId ?? proposal.ownerId)} · Due: {formatDate(newBlocker?.dueDay ?? proposal.dueDay)}{!newBlocker && proposal.dueTime ? ` ${proposal.dueTime}` : ''}</p>
+          <p className="font-medium">
+            {newBlocker
+              ? `Follow up on ${newBlocker.row}`
+              : `${proposal.state === 'Rejected' ? 'Rejected by Priya Raman' : proposal.state} · ${proposal.impact}`}
+          </p>
+          <p>
+            Owner: {personName(board, newBlocker?.ownerId ?? proposal.ownerId)} · Due: {formatDate(newBlocker?.dueDay ?? proposal.dueDay)}
+            {!newBlocker && proposal.dueTime ? ` ${proposal.dueTime}` : ''}
+          </p>
           <p className="text-muted">{newBlocker ? 'Resolve this critical-path prerequisite before relying on the current plan.' : proposal.rationaleSummary}</p>
-          {currentCandidate && <p className="text-muted">{currentCandidate.row}: {currentCandidate.status} · {currentCandidate.quality} · {site.rows[currentCandidate.row].source}.</p>}
+          {currentCandidate && (
+            <p className="text-muted">
+              {currentCandidate.row}: {currentCandidate.status} · {currentCandidate.quality} · {site.rows[currentCandidate.row].source}.
+            </p>
+          )}
           {!ranked.length && <p className="text-muted">A recommendation is not permission to dispatch.</p>}
           {proposal.note && <p>{proposal.note}</p>}
           {site.holdActive && <p className="font-medium">Hold is already in effect.</p>}

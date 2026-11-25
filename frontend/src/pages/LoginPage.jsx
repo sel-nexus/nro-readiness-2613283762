@@ -46,7 +46,9 @@ export default function LoginPage({onSignIn, onContinue}) {
           NRO Readiness
         </div>
         <p className="mt-2 hidden text-white/75 md:block">Network Rollout Operations</p>
-        <p className="mt-2 max-w-md font-semibold tracking-tight md:text-title min-[1366px]:mt-12 min-[1366px]:text-5xl">Stop the crew before a failed visit.</p>
+        <p className="mt-2 max-w-md font-semibold tracking-tight md:text-title min-[1366px]:mt-12 min-[1366px]:text-5xl">
+          Stop the crew before a failed visit.
+        </p>
         <ul className="mt-6 hidden space-y-2 border-l border-white/25 pl-4 text-white/80 min-[1366px]:block">
           <li>16 sites on the West Metro board</li>
           <li>2 crews on hold for power</li>
@@ -70,11 +72,17 @@ export default function LoginPage({onSignIn, onContinue}) {
           <p className="meta mt-1">West Metro Cluster 4</p>
           <form className="mt-4 space-y-2" noValidate onSubmit={event => { event.preventDefault(); void enter(() => onSignIn({email, password})); }}>
             <label className="block font-medium" htmlFor="login-email">Email</label>
-            <input id="login-email" className="field w-full" type="email" autoComplete="username" required aria-invalid={invalid} aria-describedby={invalid ? 'login-error' : undefined} value={email} onChange={event => setEmail(event.target.value)} />
+            <input id="login-email" className="field w-full" type="email" autoComplete="username" required
+              aria-invalid={invalid} aria-describedby={invalid ? 'login-error' : undefined}
+              value={email} onChange={event => setEmail(event.target.value)} />
             <label className="block font-medium" htmlFor="login-password">Password</label>
             <div className="flex gap-2">
-              <input id="login-password" className="field min-w-0 flex-1" type={show ? 'text' : 'password'} autoComplete="current-password" required aria-invalid={invalid} aria-describedby={invalid ? 'login-error' : undefined} value={password} onChange={event => setPassword(event.target.value)} />
-              <button type="button" className="btn" aria-controls="login-password" onClick={() => setShow(value => !value)}>{show ? 'Hide password' : 'Show password'}</button>
+              <input id="login-password" className="field min-w-0 flex-1" type={show ? 'text' : 'password'} autoComplete="current-password" required
+                aria-invalid={invalid} aria-describedby={invalid ? 'login-error' : undefined}
+                value={password} onChange={event => setPassword(event.target.value)} />
+              <button type="button" className="btn" aria-controls="login-password" onClick={() => setShow(value => !value)}>
+                {show ? 'Hide password' : 'Show password'}
+              </button>
             </div>
             <p id="login-error" role="alert" className="min-h-[18px] text-meta text-red">{error?.message}</p>
             <button type="submit" className="btn btn-primary w-full" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
@@ -84,12 +92,17 @@ export default function LoginPage({onSignIn, onContinue}) {
           <ul className="mt-1 divide-y divide-line">
             {accounts.map(account => (
               <li key={account.id} className="flex items-center gap-2 py-1.5">
-                <span aria-hidden="true" className="grid size-8 shrink-0 place-items-center rounded-full bg-green-wash text-meta font-semibold text-teal-ink">{initials(account.name)}</span>
+                <span aria-hidden="true" className="grid size-8 shrink-0 place-items-center rounded-full bg-green-wash text-meta font-semibold text-teal-ink">
+                  {initials(account.name)}
+                </span>
                 <div className="min-w-0 flex-1">
                   <p className="font-medium leading-tight text-ink">{account.name}</p>
                   <p className="meta">{account.title}</p>
                 </div>
-                <button type="button" className="btn" aria-label={`Continue as ${account.name}`} disabled={busy} onClick={() => void enter(() => onContinue(account.id))}>Continue</button>
+                <button type="button" className="btn" aria-label={`Continue as ${account.name}`} disabled={busy}
+                  onClick={() => void enter(() => onContinue(account.id))}>
+                  Continue
+                </button>
               </li>
             ))}
           </ul>

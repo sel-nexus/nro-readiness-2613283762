@@ -125,7 +125,11 @@ export function PredictionPanel({board, site, actor, store, readiness}) {
             </div>
           )}
           <p className="meta">Assessment horizon: {formatDate(start)} – {formatDate(end)}</p>
-          {canRun && <button type="button" className={`btn ${outage && !dismissed ? '' : 'btn-primary'}`} disabled={busy} onClick={() => run('run')}>Run assessment</button>}
+          {canRun && (
+            <button type="button" className={`btn ${outage && !dismissed ? '' : 'btn-primary'}`} disabled={busy} onClick={() => run('run')}>
+              Run assessment
+            </button>
+          )}
           {!canRun && horizonEligible && <p className="meta">Operators, the Approver and the Facilitator can run assessments.</p>}
           <p role="status" aria-live="polite">{announcement}</p>
           {error && <p role="alert" className="text-red">{error}</p>}

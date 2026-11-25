@@ -95,7 +95,8 @@ it('keeps the prior score unmodified on failure and Retry recovers assessment on
   selectScenario(store, {commandId: 'interruption', scenario: 'D'});
   const prior = store.getSnapshot().program.lastScore;
   const scored = store.getSnapshot().audit.events.filter(event => event.verb === 'Scored').length;
-  const first = runAssessment(store, {commandId: 'retry-first', siteId: HARBOR, mode: 'retry'});
+  const first = runAssessment(store, {commandId: 'retry-first', siteId: HARBOR,
+    expectedSiteRev: store.getSnapshot().sites[HARBOR].rev, mode: 'retry'});
   await vi.advanceTimersByTimeAsync(700);
   expect((await first).data).toMatchObject({state: 'retained_outage', scoredAt: prior.scoredAt, correlationId: prior.correlationId});
   expect(store.getSnapshot().audit.events.filter(event => event.verb === 'Scored')).toHaveLength(scored);
@@ -103,7 +104,8 @@ it('keeps the prior score unmodified on failure and Retry recovers assessment on
   expect(keepLastScore(store, {siteId: HARBOR}).data.scoredAt).toBe(prior.scoredAt);
   expect(entries).toEqual(unchanged);
   expect(health(store, 'Assessment').lastSyncAt).toBe(prior.scoredAt);
-  const second = runAssessment(store, {commandId: 'retry-second', siteId: HARBOR, mode: 'retry'});
+  const second = runAssessment(store, {commandId: 'retry-second', siteId: HARBOR,
+    expectedSiteRev: store.getSnapshot().sites[HARBOR].rev, mode: 'retry'});
   await vi.advanceTimersByTimeAsync(700);
   expect((await second).data).toMatchObject({state: 'current', probability: 34, correlationId: 'corr_1842_r1'});
   expect(health(store, 'DDL').state).toBe('Down');

@@ -115,13 +115,14 @@ function replay(board, actor, site, input, signature) {
  *
  * Args:
  *   store: Committed workshop storage adapter.
- *   input: Command ID, site ID, optional expected site revision, mode and navigation signal.
+ *   input: Command ID, site ID, expected site revision, mode and navigation signal.
  * Returns:
  *   A promise for the committed outcome or a failure; stale callbacks never write.
  */
 export async function runAssessment(store, input = {}) {
-  const {siteId, commandId, mode = 'run', signal} = input;
-  if (typeof commandId !== 'string' || !commandId.trim() || typeof siteId !== 'string' || !['run', 'retry'].includes(mode)) {
+  const {siteId, commandId, expectedSiteRev, mode = 'run', signal} = input;
+  if (typeof commandId !== 'string' || !commandId.trim() || typeof siteId !== 'string' ||
+    !Number.isSafeInteger(expectedSiteRev) || expectedSiteRev < 0 || !['run', 'retry'].includes(mode)) {
     return commandError('BAD_INPUT', 'Invalid assessment command.');
   }
   const board = store.getSnapshot();
@@ -130,7 +131,7 @@ export async function runAssessment(store, input = {}) {
   if (!Object.hasOwn(board.sites, siteId)) return commandError('NOT_FOUND', 'Site not found.');
   const site = board.sites[siteId];
   const fence = siteFence(store, board, site);
-  const intentKey = `${intent}:${siteId}`;
+  const intentKey = `${intent}:${siteId}:${expectedSiteRev}`;
   const existing = Object.hasOwn(board.audit.receipts, commandId);
   if (signal?.aborted || Object.entries(fence).some(([field, value]) =>
     input[field] !== undefined && input[field] !== value && !(existing && field === 'expectedSiteRev'))) {
@@ -142,24 +143,26 @@ export async function runAssessment(store, input = {}) {
   const faultRev = board.faults.rev;
   const active = pending.get(store) ?? new Set();
   const key = `${fence.expectedGeneration}:${fence.expectedSessionEpoch}:${siteId}`;
-  if (active.has(key)) return commandError('SCORING', 'An assessment is already running for this site.');
-  pending.set(store, active);
-  active.add(key);
+  if (!existing) {
+    if (active.has(key)) return commandError('SCORING', 'An assessment is already running for this site.');
+    pending.set(store, active);
+    active.add(key);
+  }
   try {
     if (!existing) await waitForReplay(signal);
     if (signal?.aborted) return commandError('STALE_INTENT', STALE);
-    return store.commit({...fence, commandId, intentKey, authorize: (live, actor) => {
+    return store.commit({...fence, expectedSiteRev, commandId, intentKey, authorize: (live, actor) => {
       if (!authorize(actor, intent)) return false;
       const candidate = live.sites[siteId];
       if (signal?.aborted) return commandError('STALE_INTENT', STALE);
       if (existing) return Object.hasOwn(live.audit.receipts, commandId) || commandError('STALE_INTENT', STALE);
-      return (candidate?.rev === fence.expectedSiteRev && candidate.planRev === plans && candidate.evidenceRev === evidence &&
+      return (candidate?.rev === expectedSiteRev && candidate.planRev === plans && candidate.evidenceRev === evidence &&
         live.faults.rev === faultRev && assessmentSignature(candidate) === signature) || commandError('STALE_INTENT', STALE);
     }}, (live, actor) => replay(live, actor, live.sites[siteId], {commandId, mode}, signature));
   } catch {
     return commandError('ASSESSMENT_ERROR', 'Could not complete the assessment. No score was confirmed.');
   } finally {
-    active.delete(key);
+    if (!existing) active.delete(key);
   }
 }
 

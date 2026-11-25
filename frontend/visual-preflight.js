@@ -34,6 +34,8 @@ try {
     await capture(page, `${label}-portfolio`);
     await page.getByRole('link', {name: 'Review Harbor Point'}).click();
     await page.getByRole('tab', {name: 'Prediction'}).click();
+    await page.getByRole('tabpanel').getByRole('heading', {name: 'Readiness probability'}).waitFor();
+    await page.evaluate(() => window.scrollTo(0, 0));
     await capture(page, `${label}-prediction`);
     await page.close();
   }

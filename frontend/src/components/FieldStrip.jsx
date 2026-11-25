@@ -94,7 +94,9 @@ export function FieldStrip({board, site, actor, store, notify}) {
           <h3 className="font-semibold">North Gate spare crew · 21 May</h3>
           <p className="text-muted">This spare slot is separate from the active assignment.</p>
           {authorize(actor, INTENT.resequence) && (
-            <Link className="font-medium text-teal-ink underline" to={`${sitePath(site.id)}?tab=approval`} state={{optionId: option.id}}>Review resequence in Approval</Link>
+            <Link className="font-medium text-teal-ink underline" to={`${sitePath(site.id)}?tab=approval`} state={{optionId: option.id}}>
+              Review resequence in Approval
+            </Link>
           )}
         </div>
       )}

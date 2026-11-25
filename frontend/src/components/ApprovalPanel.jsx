@@ -66,7 +66,12 @@ export function ApprovalPanel({board, site, actor, store, readiness, notify, opt
           <p className="meta">Commercial terms on file.</p>
           <p>{review.scope.kind === 'hold' ? 'Hold the work; keep the supplier, baseline date and crew assignment.'
             : 'A plan change does not authorize dispatch or move the working crew.'}</p>
-          {review.scope.shiftAt && <p>Proposed crew slot: {personName(board, review.scope.crewLeadId)} · Crew of {review.scope.crewSize} · {formatDate(review.scope.shiftAt, true)}</p>}
+          {review.scope.shiftAt && (
+            <p>
+              Proposed crew slot: {personName(board, review.scope.crewLeadId)} · Crew of {review.scope.crewSize}
+              {' · '}{formatDate(review.scope.shiftAt, true)}
+            </p>
+          )}
         </>
       )}
       {!review.scope && !site.decisions.length && !review.label && review.validOption && <p>No approval is recorded.</p>}
@@ -78,8 +83,9 @@ export function ApprovalPanel({board, site, actor, store, readiness, notify, opt
               <label className="font-medium" htmlFor="decision-reason">Why is this the right call for the cluster?</label>
               <textarea id="decision-reason" className="field" rows={3} value={rationale}
                 aria-required="true" aria-invalid={error?.code === 'BAD_RATIONALE'}
-                aria-describedby={error?.code === 'BAD_RATIONALE' ? 'reason-hint decision-error' : 'reason-hint'} onChange={event => setRationale(event.target.value)} />
-              <p id="reason-hint" className="meta">Minimum 12 characters.</p>
+                aria-describedby={error?.code === 'BAD_RATIONALE' ? 'reason-hint decision-error' : 'reason-hint'}
+                onChange={event => setRationale(event.target.value)} />
+              <p id="reason-hint" className="meta">12–1000 characters, excluding leading and trailing whitespace.</p>
               {needsReview && (
                 <label className="flex items-start gap-2">
                   <input type="checkbox" checked={confidenceReviewed} onChange={event => setConfidenceReviewed(event.target.checked)} />
@@ -92,14 +98,20 @@ export function ApprovalPanel({board, site, actor, store, readiness, notify, opt
             {Object.entries(LABELS).map(([verb, label]) => (
               <button key={verb} type="button" className={`btn disabled:opacity-50 ${verb === 'approve' ? 'btn-primary' : ''}`}
                 disabled={!canDecide} aria-describedby={denial ? 'approval-denied-reason' : undefined}
-                aria-expanded={verb === 'modify' ? modifying : undefined} onClick={() => verb === 'modify' ? setModifying(!modifying) : submit(verb)}>{label}</button>
+                aria-expanded={verb === 'modify' ? modifying : undefined}
+                onClick={() => verb === 'modify' ? setModifying(!modifying) : submit(verb)}>
+                {label}
+              </button>
             ))}
           </div>
           {!canDecide && (
-            <button className="btn" type="button" aria-describedby="approval-denied-reason" onClick={() => submit('approve')}>Record denied approval attempt</button>
+            <button className="btn" type="button" aria-describedby="approval-denied-reason" onClick={() => submit('approve')}>
+              Record denied approval attempt
+            </button>
           )}
           {canDecide && modifying && (
-            <fieldset className="grid max-w-xl gap-2 border-t border-line pt-2" aria-describedby={error?.code === 'BAD_MODIFICATION' ? 'decision-error' : undefined}>
+            <fieldset className="grid max-w-xl gap-2 border-t border-line pt-2"
+              aria-describedby={error?.code === 'BAD_MODIFICATION' ? 'decision-error' : undefined}>
               <legend className="font-medium">Modify follow-up</legend>
               <label htmlFor="modified-owner">Owner</label>
               <select id="modified-owner" className="field" aria-required="true" value={ownerId} onChange={event => setOwnerId(event.target.value)}>
@@ -109,9 +121,12 @@ export function ApprovalPanel({board, site, actor, store, readiness, notify, opt
                 ))}
               </select>
               <label htmlFor="modified-due">Due date</label>
-              <input id="modified-due" className="field" aria-required="true" type="date" min={BOARD_AT.slice(0, 10)} value={dueDay} onChange={event => setDueDay(event.target.value)} />
+              <input id="modified-due" className="field" aria-required="true" type="date" min={BOARD_AT.slice(0, 10)}
+                value={dueDay} onChange={event => setDueDay(event.target.value)} />
               <label htmlFor="modified-note">Short note</label>
-              <textarea id="modified-note" className="field" aria-required="true" rows={2} value={note} onChange={event => setNote(event.target.value)} />
+              <textarea id="modified-note" className="field" aria-required="true" aria-describedby="modified-note-hint"
+                rows={2} value={note} onChange={event => setNote(event.target.value)} />
+              <p id="modified-note-hint" className="meta">Up to 1000 characters, excluding leading and trailing whitespace.</p>
               <button className="btn justify-self-start" type="button" onClick={() => submit('modify')}>Save modification</button>
             </fieldset>
           )}
@@ -121,7 +136,10 @@ export function ApprovalPanel({board, site, actor, store, readiness, notify, opt
       {site.decisions.map(decision => (
         <article key={decision.id} id={decision.id} tabIndex={-1} className="space-y-2 border-t border-line pt-3">
           <h3 className="font-semibold">{decision.verb === 'reject' ? 'Rejected by Priya Raman' : decision.disposition ?? 'Approved dispatch'}</h3>
-          <p className="meta">{personName(board, decision.actorId)} · {formatDate(decision.at, true)} · {LABELS[decision.verb]}{decision.workflowId ? ` · ${decision.workflowId} queued locally` : ''}</p>
+          <p className="meta">
+            {personName(board, decision.actorId)} · {formatDate(decision.at, true)} · {LABELS[decision.verb]}
+            {decision.workflowId ? ` · ${decision.workflowId} queued locally` : ''}
+          </p>
           <p className="break-words">{decision.rationale}</p>
           <div className="grid gap-3 sm:grid-cols-2">
             <PlanValues heading="Before decision" plan={decision.before} />
