@@ -2,21 +2,20 @@
 import {useEffect, useRef} from 'react';
 import PropTypes from 'prop-types';
 import {Link, useLocation, useNavigate} from 'react-router-dom';
+import {ApprovalPanel} from '../components/ApprovalPanel.jsx';
+import {AuditPanel} from '../components/AuditPanel.jsx';
 import {EvidenceMatrix} from '../components/EvidenceMatrix.jsx';
+import {FieldStrip} from '../components/FieldStrip.jsx';
 import {PredictionPanel} from '../components/PredictionPanel.jsx';
+import {Recommendation} from '../components/Recommendation.jsx';
 import {BOARD_AT, SUPPLIERS} from '../data/register.js';
 import {formatDate, personName, RISK_STYLE, sitePath} from '../utils/portfolio.js';
 import {confidenceBand, deriveReadiness} from '../utils/readiness.js';
 
 const TABS = [['evidence', 'Evidence'], ['prediction', 'Prediction'], ['action', 'Blockers and action'], ['approval', 'Approval'], ['audit', 'Audit']];
 
-/** Render the exact site supplied by the route guard.
- *
- * Args:
- *   panes: Optional action, field, approval and audit components. Each receives
- *     board, site, actor, store, readiness, notify and the current hash target.
- */
-export default function SiteWorkspace({board, site, actor, store, notify, panes = {}}) {
+/** Render the exact site supplied by the route guard, sharing one committed context. */
+export default function SiteWorkspace({board, site, actor, store, notify}) {
   const location = useLocation();
   const navigate = useNavigate();
   const frame = useRef(null);
@@ -24,6 +23,7 @@ export default function SiteWorkspace({board, site, actor, store, notify, panes 
   const index = Math.max(0, TABS.findIndex(([key]) => key === requested));
   const [tab, title] = TABS[index];
   const target = location.hash.slice(1);
+  const optionId = typeof location.state?.optionId === 'string' ? location.state.optionId : null;
   const snapshot = board.audit.snapshots[site.assessment?.snapshotId];
   const readiness = deriveReadiness(site, BOARD_AT, board.faults, snapshot);
   const {lastScore, current, confidence, risk, disposition} = readiness;
@@ -32,9 +32,9 @@ export default function SiteWorkspace({board, site, actor, store, notify, panes 
   const probability = onAir ? '—' : lastScore?.probability == null ? 'Unavailable' : `${lastScore.probability}%`;
   const supplier = SUPPLIERS[site.plan.supplierId];
   const notes = [...site.notes].reverse().sort((a, b) => b.at.localeCompare(a.at));
-  const audit = board.audit.events.filter(event => event.siteId === site.id).reverse();
+  const auditCount = board.audit.events.filter(event => event.siteId === site.id).length;
+  const crewRev = board.program.crew.find(item => item.siteId === site.id)?.rev ?? null;
   const props = {board, site, actor, store, notify, readiness, target};
-  const {action: Action, field: Field, approval: Approval, audit: Audit} = panes;
 
   useEffect(() => {
     const previous = document.title;
@@ -46,7 +46,7 @@ export default function SiteWorkspace({board, site, actor, store, notify, panes 
     if (!target || tab === 'evidence') return;
     const element = [...frame.current.querySelectorAll('[id]')].find(node => node.id === target);
     element?.focus();
-  }, [tab, target]);
+  }, [tab, target, site.rev]);
 
   /** Move focus and select the next URL tab with standard tablist keys. */
   function moveTab(event) {
@@ -109,7 +109,7 @@ export default function SiteWorkspace({board, site, actor, store, notify, panes 
           <button key={key} type="button" role="tab" id={`tab-${key}`} aria-controls="workspace-pane" aria-selected={key === tab}
             tabIndex={key === tab ? 0 : -1} onKeyDown={moveTab} onClick={() => navigate(`${sitePath(site.id)}?tab=${key}`)}
             className={`shrink-0 whitespace-nowrap border-b-2 px-3 py-3 font-medium ${tab === key ? 'border-teal text-teal-ink' : 'border-transparent text-muted hover:bg-surface'}`}>
-            {label}{key === 'audit' ? ` (${audit.length})` : ''}
+            {label}{key === 'audit' ? ` (${auditCount})` : ''}
           </button>
         ))}
       </div>
@@ -118,45 +118,18 @@ export default function SiteWorkspace({board, site, actor, store, notify, panes 
         {tab === 'prediction' && <PredictionPanel {...props} />}
         {tab === 'action' && (
           <div className="space-y-3">
-            {Action ? <Action {...props} /> : (
-              <section className="card space-y-2 p-4">
-                <h2>{title}</h2>
-                <p>{site.blocker === 'None' ? 'No blocker is recorded.' : site.blocker}</p>
-                <p>{site.proposal?.impact}</p>
-              </section>
-            )}
-            {Field && <Field {...props} />}
+            <Recommendation {...props} />
+            <FieldStrip {...props} />
           </div>
         )}
-        {tab === 'approval' && (Approval ? <Approval {...props} /> : (
-          <section className="card space-y-2 p-4">
-            <h2>{title}</h2>
-            {!site.decisions.length && <p>{site.proposal?.state === 'Pending approval' ? 'Pending approval' : 'No approval is recorded.'}</p>}
-            {site.decisions.map(decision => (
-              <div key={decision.id} id={decision.id} tabIndex={-1}>
-                <p>{personName(board, decision.actorId)} · {formatDate(decision.at, true)} · {decision.scope.kind}</p>
-                <p>{decision.rationale}</p>
-              </div>
-            ))}
-          </section>
-        ))}
-        {tab === 'audit' && (Audit ? <Audit {...props} /> : (
-          <section className="card p-4">
-            <h2>{title}</h2>
-            <ul className="divide-y divide-line">
-              {audit.map(event => (
-                <li key={event.id} className="py-2">
-                  <p className="font-medium">{event.verb} · {formatDate(event.at, true)}</p>
-                  <p>{event.detail}</p>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ))}
+        {tab === 'approval' && (
+          <ApprovalPanel key={JSON.stringify([site.rev, board.faults.rev, crewRev, optionId])} {...props} optionId={optionId} />
+        )}
+        {tab === 'audit' && <AuditPanel {...props} />}
       </section>
     </div>
   );
 }
 
 SiteWorkspace.propTypes = {board: PropTypes.object.isRequired, site: PropTypes.object.isRequired, actor: PropTypes.object.isRequired,
-  store: PropTypes.object.isRequired, notify: PropTypes.func.isRequired, panes: PropTypes.object};
+  store: PropTypes.object.isRequired, notify: PropTypes.func.isRequired};
