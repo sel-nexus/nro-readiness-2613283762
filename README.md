@@ -32,7 +32,7 @@ npm run e2e
 npm run build
 ```
 
-`npm test` runs Node storage/fixture tests and Vitest domain tests. Playwright starts a production preview by default. Use a separate browser profile/origin for verification. To build the static image from the repository root: `docker build -t nro-readiness frontend`, then `docker run --rm -p 8080:8080 nro-readiness`. The load balancer probes `/`; the container serves known SPA routes, returns 404 for missing assets, and keeps HTML revalidated and hashed assets immutable. Deploy a tested digest; verify deep links, cache behavior and asset availability before promotion.
+`npm test` runs Node storage/fixture tests and Vitest domain tests. Playwright starts a production preview by default. Use a separate browser profile/origin for verification. To build the static image from the repository root: `docker build -t nro-readiness frontend`, then `docker run --rm -p 8080:8080 nro-readiness`. The load balancer probes `/`; the container serves the SPA for extensionless routes so it can render its not-found view. Missing assets still return HTTP 404, HTML is revalidated, and hashed assets are immutable. Deploy a tested digest; verify deep links, cache behavior and asset availability before promotion.
 
 ## Limits
 
