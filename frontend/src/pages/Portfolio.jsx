@@ -1,13 +1,13 @@
 /** Compose the full-board summary with independently filtered released sites. */
 import {useState} from 'react';
 import PropTypes from 'prop-types';
-import {Link} from 'react-router-dom';
+import {Link, useNavigate, useSearchParams} from 'react-router-dom';
 import {Icon} from '../components/icons.jsx';
+import {ExceptionSummary} from '../components/ProgramPanels.jsx';
 import {ReadinessTable} from '../components/ReadinessTable.jsx';
 import {PROGRAMS, makeProgramBoard, programPath} from '../data/programs.js';
-import {FILTERS, formatDate, formatMonth, personName, RISK_STYLE, selectPortfolio, sitePath} from '../utils/portfolio.js';
+import {FILTERS, formatDate, formatMonth, personName, RISK_LABELS, RISK_STYLE, selectPortfolio, sitePath, withOperationalParams} from '../utils/portfolio.js';
 
-const riskLabels = {Green: 'Good', Amber: 'Needs Attention', Red: 'Critical'};
 const catalog = Object.entries(PROGRAMS).map(([id, meta]) => ({id, ...meta, seed: makeProgramBoard(id)}));
 
 /** List all program cards and their design queues without exposing workshop diagnostics. */
@@ -58,178 +58,133 @@ export default function Portfolio() {
   );
 }
 
-/** Keep the existing register and filters available until the triage slice refines them. */
+/** Render the immediate decision, scope-wide signals and filtered site register. */
 export function ProgramBoard({board, programId, query}) {
-  const [chip, setChip] = useState('All');
-  const [exception, setException] = useState(null);
+  const [params] = useSearchParams();
+  const navigate = useNavigate();
   const [sort, setSort] = useState(null);
-  const model = selectPortfolio(board, {query, chip, sort, exception});
-  const {program} = board;
-  const names = sites => sites.map(site => site.name).join(' and ');
+  const filter = params.get('filter');
+  const chip = [...FILTERS, 'At risk', 'On air this month'].includes(filter) ? filter : 'All';
+  const owner = params.get('owner');
+  const exception = params.get('exception');
+  const model = selectPortfolio(board, {query, chip, sort, exception, owner});
+  const {cluster} = board.program;
+  const {decision, focus} = PROGRAMS[programId];
+  const boardPath = programPath('/board', programId);
   const stats = [
-    ['Sites at risk', model.atRisk, `of ${model.total} sites`, `${model.hold} on hold · ${model.dispatched} dispatched`],
-    ['Visits at stake this week', model.visitsAtStake.length, '', names(model.visitsAtStake)],
-    ['Failed visits this quarter', model.failed, '', `${model.failedOpen} still open`],
-    ['On air in May', model.onAir.length, '', names(model.onAir)],
+    ['Sites at risk', model.atRisk, `of ${model.total} sites`, withOperationalParams(boardPath, {filter: 'At risk'})],
+    ['Visits at stake this week', model.visitsAtStake.length, null, withOperationalParams(programPath('/schedule', programId), {view: 'at-stake'})],
+    ['Failed visits this quarter', model.failed, `${model.failedOpen} still open`, `${programPath('/activity', programId)}#failures-title`],
+    ['On air this month', model.onAir.length, null, withOperationalParams(boardPath, {filter: 'On air this month'})],
   ];
 
-  /** Flip only the chosen comparator, including the initial ascending Risk heading. */
+  /** Flip the chosen comparator, including the initial ascending Risk heading. */
   function changeSort(key) {
     setSort(current => ({key, direction: (current?.key === key && current.direction === 'ascending') || (!current && key === 'risk') ? 'descending' : 'ascending'}));
   }
 
   return (
-    <div className="space-y-5">
-      <section className="flex flex-wrap items-start justify-between gap-3" aria-labelledby="portfolio-title">
+    <div className="space-y-5" aria-label="Program Board">
+      <section className="flex flex-wrap items-end justify-between gap-3" aria-labelledby="portfolio-title">
         <div>
-          <h1 id="portfolio-title" className="text-title font-semibold text-ink">{program.cluster}</h1>
-          <p className="mt-2 font-medium">{PROGRAMS[programId].decision}</p>
+          <h1 id="portfolio-title">{cluster}</h1>
+          <p className="mt-2 text-lg font-semibold">{decision}</p>
         </div>
-        <Link className="btn btn-primary" to={sitePath(PROGRAMS[programId].focus)}>
-          Review {board.sites[PROGRAMS[programId].focus].name}
+        <Link className="btn btn-primary" to={sitePath(focus)}>
+          Review {board.sites[focus].name}
           <Icon name="arrow" />
         </Link>
       </section>
-      <section aria-label="Portfolio totals" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {stats.map(([label, value, qualifier, detail]) => (
-          <article className="card p-4" key={label}>
-            <h2 className="font-medium text-ink">{label}</h2>
-            <p className="mt-2 flex items-baseline gap-1.5 text-kpi font-semibold text-ink">
-              {value}
-              {qualifier && <span className="meta font-normal">{qualifier}</span>}
-            </p>
-            <p className="meta mt-1">{detail}</p>
-          </article>
+      <section aria-label="Portfolio totals" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {stats.map(([label, value, detail, to]) => (
+          <Link className="btn !flex !h-full !min-w-0 !flex-col !items-start !justify-start !gap-2 !whitespace-normal !p-4 text-left" key={label} to={to}>
+            <span className="font-medium">{label}</span>
+            <span className="flex items-baseline gap-1.5 tabular-nums">
+              <strong className="text-kpi text-[var(--primary)]">{value}</strong>
+              {detail && <span className="meta">{detail}</span>}
+            </span>
+          </Link>
         ))}
       </section>
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <section className="card p-4" aria-labelledby="readiness-trend">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <h2 id="readiness-trend" className="text-base font-semibold text-ink">Portfolio readiness</h2>
-              <p className="meta">Share of the Board rated Good.</p>
-            </div>
-            <svg
-              role="img"
-              aria-label={`14-day Good share trend: ${program.trend.map(entry => `${entry.greenShare}%`).join(', ')}`}
-              viewBox="0 0 130 40"
-              className="h-12 w-32 shrink-0"
-            >
-              <path aria-hidden="true" d="M0 34H130M0 10H130" className="stroke-line" />
-              <polyline
-                points={program.trend.map((entry, index) => `${2 + index * 9.7},${38 - 0.36 * entry.greenShare}`).join(' ')}
-                className="fill-none stroke-teal"
-                strokeWidth="2"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </div>
-          <div aria-hidden="true" className="mt-3 flex h-2 gap-0.5 overflow-hidden rounded-full">
+      <section className="card grid gap-4 p-4 md:grid-cols-2" aria-label="Portfolio readiness">
+        <div>
+          <h2 className="program-section-title">Risk distribution</h2>
+          <div aria-hidden="true" className="mt-3 flex h-2 gap-0.5 overflow-hidden">
             {Object.entries(model.risk).map(([risk, value]) => value > 0 && <span key={risk} className={risk === 'Green' ? 'program-good-fill' : RISK_STYLE[risk].fill} style={{flexGrow: value}} />)}
           </div>
           <ul className="mt-2 flex flex-wrap gap-3">
             {Object.entries(model.risk).map(([risk, value]) => (
               <li key={risk} className={`inline-flex items-center gap-1 text-meta ${RISK_STYLE[risk].ink}`}>
-                <Icon name={risk} />
-                {riskLabels[risk]} {value}
+                <Icon name={risk} /> {RISK_LABELS[risk]} {value}
               </li>
             ))}
           </ul>
-        </section>
-        <section className="card p-4" aria-labelledby="exception-title">
-          <h2 id="exception-title" className="text-base font-semibold text-ink">Exceptions</h2>
-          <ul className="mt-2 grid gap-2 sm:grid-cols-2">
-            {model.exceptions.map(group => (
-              <li key={group.id} className="min-w-0">
-                <button
-                  type="button"
-                  className={`btn ${
-                    exception === group.id ? 'border-teal bg-green-wash text-teal-ink' : 'border-transparent text-ink hover:bg-surface'}`}
-                  aria-pressed={exception === group.id}
-                  onClick={() => {
-                    setChip('All');
-                    setException(exception === group.id ? null : group.id);
-                  }}
-                >
-                  {group.sites.length} {group.label}
-                </button>
-                <ul className="flex flex-wrap gap-x-2 px-2 text-meta">
-                  {group.sites.map(site => (
-                    <li key={site.id}>
-                      <Link className="btn" to={sitePath(site.id)}>{site.name}</Link>
-                    </li>
-                  ))}
-                </ul>
-              </li>
-            ))}
-          </ul>
-        </section>
-      </div>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="program-section-title">14-day readiness trend</h2>
+            <p className="meta">Recorded share of sites rated Good</p>
+          </div>
+          {model.trend.length ? (
+            <svg role="img"
+              aria-label={`14-day Good share trend: ${model.trend.map(({day, greenShare}) => `${formatDate(day)} ${greenShare}%`).join(', ')}`}
+              viewBox="0 0 130 40" className="h-12 w-32 shrink-0">
+              <path d="M0 34H130M0 10H130" className="stroke-line" />
+              <polyline points={model.trend.map(({greenShare}, i) => `${2 + i * 9.7},${38 - 0.36 * greenShare}`).join(' ')}
+                className="fill-none stroke-teal" strokeWidth="2" strokeLinejoin="round" />
+            </svg>
+          ) : <p className="meta">No recorded trend.</p>}
+        </div>
+      </section>
+      <ExceptionSummary groups={model.exceptions} active={exception} boardPath={boardPath} />
       <section aria-label="Released-site filters" className="space-y-2">
         <div className="flex flex-wrap gap-2">
           {FILTERS.map(label => (
-            <button
-              key={label}
-              type="button"
-              aria-pressed={!exception && chip === label}
-              className={`btn ${
-                !exception && chip === label ? 'border-teal bg-green-wash text-teal-ink' : 'border-line bg-card text-ink hover:border-muted'}`}
-              onClick={() => {
-                setChip(label);
-                setException(null);
-              }}
-            >
+            <button key={label} type="button" aria-pressed={!exception && chip === label}
+              className={`btn ${!exception && chip === label ? 'border-teal bg-surface' : ''}`}
+              onClick={() => navigate(withOperationalParams(boardPath, {filter: label === 'All' ? null : label, owner}))}>
               {label}
             </button>
           ))}
         </div>
-        <p role="status" className="meta">
-          Showing {model.visible.length} of {model.total} sites.
-        </p>
+        {(owner || !FILTERS.includes(chip)) && (
+          <p className="flex flex-wrap items-center gap-2">
+            <span>{[owner && `Next owner: ${personName(board, owner)}`, !FILTERS.includes(chip) && chip].filter(Boolean).join(' · ')}</span>
+            <Link className="btn" to={boardPath}>Clear filters</Link>
+          </p>
+        )}
+        <p role="status" className="meta">Showing {model.visible.length} of {model.total} sites.</p>
+        <ReadinessTable board={board} sites={model.visible} sort={sort} onSort={changeSort}
+          ownerPath={ownerId => withOperationalParams(boardPath, {owner: ownerId})} />
       </section>
-      <ReadinessTable board={board} sites={model.visible} sort={sort} onSort={changeSort} />
     </div>
   );
 }
 
 ProgramBoard.propTypes = {board: PropTypes.object.isRequired, programId: PropTypes.string.isRequired, query: PropTypes.string.isRequired};
 
-/** Present scoped schedule, activity or pending-site links pending dedicated workflow views. */
-export function ProgramList({board, page}) {
-  const {program, sites} = board;
-  const crews = program.crew.map(item => ({id: item.id, siteId: item.siteId, label: sites[item.siteId]?.name ?? 'Hold day',
-    detail: [formatDate(item.shiftAt ?? item.shiftDay, true), item.state,
-      item.leadId && `${personName(board, item.leadId)} · Crew of ${item.size} · ${item.depot}`].filter(Boolean).join(' · ')}));
-  const morning = [...program.morning].reverse().filter(item => item.verb !== 'Scored').map(item => ({id: item.id, siteId: item.siteId,
-    label: `${item.verb} · ${item.siteName}`, detail: `${formatDate(item.at, true)} · ${item.detail}`}));
-  const failed = program.failures.map(item => ({id: item.id, siteId: item.siteId, label: item.name,
-    detail: `${item.state} · ${formatDate(item.whenAt ?? item.whenDay, true)} · ${item.outcome} ${item.detail}`}));
-  const approvals = Object.values(sites).filter(site => site.proposal?.state === 'Pending approval').map(site => ({
-    id: site.id, siteId: site.id, label: site.name, detail: site.proposal.impact}));
-  const groups = {Schedule: [['Crews and planned visits', crews]], Activity: [['Morning log', morning], ['Failed visits', failed]],
-    Approvals: [['Waiting on the program manager', approvals]]};
+/** Present a temporary pending-site list until the approval workflow is implemented. */
+export function ProgramList({board}) {
+  const {sites} = board;
+  const approvals = Object.values(sites).filter(site => site.proposal?.state === 'Pending approval');
   return (
     <div className="space-y-5">
-      <h1>{page}</h1>
-      {groups[page].map(([title, entries]) => (
-        <section key={title} className="card p-4" aria-label={title}>
-          <h2 className="program-section-title">{title}</h2>
-          {entries.length ? (
-            <ul className="mt-2 divide-y divide-line">
-              {entries.map(({id, siteId, label, detail}) => (
-                <li key={id} className="space-y-2 py-3">
-                  {sites[siteId] ? (
-                    <Link className="btn" to={`${sitePath(siteId)}${page === 'Approvals' ? '?tab=approval' : ''}`}>{label}</Link>
-                  ) : <p className="font-medium">{label}</p>}
-                  <p>{detail}</p>
-                </li>
-              ))}
-            </ul>
-          ) : <p className="pt-2 text-muted">No records for this program.</p>}
-        </section>
-      ))}
+      <h1>Approvals</h1>
+      <section className="card p-4" aria-labelledby="pending-approvals">
+        <h2 id="pending-approvals" className="program-section-title">Waiting on the program manager</h2>
+        {approvals.length ? (
+          <ul className="mt-2 divide-y divide-line">
+            {approvals.map(site => (
+              <li key={site.id} className="space-y-2 py-3">
+                <Link className="btn" to={`${sitePath(site.id)}?tab=approval`}>{site.name}</Link>
+                <p>{site.proposal.impact}</p>
+              </li>
+            ))}
+          </ul>
+        ) : <p className="pt-2 text-muted">No records for this program.</p>}
+      </section>
     </div>
   );
 }
 
-ProgramList.propTypes = {board: PropTypes.object.isRequired, page: PropTypes.oneOf(['Schedule', 'Activity', 'Approvals']).isRequired};
+ProgramList.propTypes = {board: PropTypes.object.isRequired};

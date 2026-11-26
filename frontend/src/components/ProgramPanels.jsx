@@ -1,36 +1,30 @@
-/** Render the released schematic and the independent program history and planning panels. */
+/** Render scoped crew plans, event history and the Board exception summary. */
+import {useEffect, useRef} from 'react';
 import PropTypes from 'prop-types';
-import {Link} from 'react-router-dom';
-import {Icon} from './icons.jsx';
-import {formatDate, formatMonth, morningActivity, personName, RISK_STYLE, sitePath} from '../utils/portfolio.js';
+import {Link, useLocation} from 'react-router-dom';
+import {formatDate, morningActivity, personName, sitePath, withOperationalParams} from '../utils/portfolio.js';
 
-/** Plot the visible sites in board coordinates without requesting external map assets. */
-export function SiteSchematic({sites}) {
+/** Show exception totals and open each affected site directly. */
+export function ExceptionSummary({groups, active, boardPath}) {
   return (
-    <section aria-labelledby="schematic-title" className="card min-w-0 p-4">
-      <h2 id="schematic-title" className="text-base font-semibold text-ink">Cluster schematic</h2>
-      <p className="meta mt-1">{sites.length} visible sites</p>
-      <svg className="mx-auto mt-3 w-full max-w-xs rounded-control border border-line bg-surface" viewBox="0 0 100 100" aria-label="West Metro site positions">
-        <path aria-hidden="true" d="M20 0v100M40 0v100M60 0v100M80 0v100M0 20h100M0 40h100M0 60h100M0 80h100" className="stroke-line" strokeWidth=".3" />
-        <path aria-hidden="true" d="M7 0 12 23 27 42 32 66 21 100M0 61l30-14 38-10 32 4M0 79l38 6 23-4 39-18"
-          className="fill-none stroke-line" strokeWidth="1" />
-        {sites.map(({id, name, risk, x, y}) => (
-          <Link key={id} to={sitePath(id)} aria-label={`${name} · ${id} · ${risk}`} className={`group ${RISK_STYLE[risk].ink}`}>
-            <title>{name} · {risk}</title>
-            <circle cx={x} cy={y} r="2.9"
-              className="fill-card stroke-current opacity-80 group-hover:opacity-100 group-focus-visible:opacity-100"
-              strokeWidth=".28" />
-            {risk === 'Green' && <circle cx={x} cy={y} r="1.4" fill="currentColor" />}
-            {risk === 'Amber' && <path transform={`translate(${x} ${y})`} d="M0-1.9 1.9 0 0 1.9-1.9 0Z" fill="currentColor" />}
-            {risk === 'Red' && <rect x={x - 1.35} y={y - 1.35} width="2.7" height="2.7" fill="currentColor" />}
-          </Link>
-        ))}
-      </svg>
-      <ul className="mt-3 flex flex-wrap gap-3 text-meta" aria-label="Risk key">
-        {['Green', 'Amber', 'Red'].map(risk => (
-          <li key={risk} className={`inline-flex items-center gap-1 ${RISK_STYLE[risk].ink}`}>
-            <Icon name={risk} />
-            {risk}
+    <section className="card p-4" aria-labelledby="exception-title">
+      <h2 id="exception-title" className="program-section-title">Exceptions</h2>
+      <ul className="mt-2 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {groups.map(({id, label, sites}) => (
+          <li className="min-w-0 space-y-2" key={id}>
+            {sites.length ? (
+              <Link className={`btn !whitespace-normal ${active === id ? 'border-teal bg-surface' : ''}`} aria-current={active === id ? 'true' : undefined}
+                to={active === id ? boardPath : withOperationalParams(boardPath, {exception: id})}>{sites.length} {label}</Link>
+            ) : <p className="px-2 py-2 font-medium">0 {label}</p>}
+            {sites.length > 0 && (
+              <ul className="flex flex-wrap gap-2" aria-label={`Sites with ${label}`}>
+                {sites.map(site => (
+                  <li key={site.id}>
+                    <Link className="btn !min-h-0 !px-2 !py-1 !whitespace-normal" to={sitePath(site.id)}>{site.name}</Link>
+                  </li>
+                ))}
+              </ul>
+            )}
           </li>
         ))}
       </ul>
@@ -38,76 +32,107 @@ export function SiteSchematic({sites}) {
   );
 }
 
-SiteSchematic.propTypes = {sites: PropTypes.arrayOf(PropTypes.object).isRequired};
+ExceptionSummary.propTypes = {groups: PropTypes.arrayOf(PropTypes.object).isRequired, active: PropTypes.string, boardPath: PropTypes.string.isRequired};
 
-/** Display all planning/history panels using their own independent program records. */
-export function ProgramPanels({board}) {
+/** Link released sites without making archived records point to missing pages. */
+function SiteControl({siteId, sites, label}) {
+  return sites[siteId] ? <Link className="btn !whitespace-normal" to={sitePath(siteId)}>{label}</Link> : <p className="font-semibold">{label}</p>;
+}
+
+SiteControl.propTypes = {siteId: PropTypes.string, sites: PropTypes.object.isRequired, label: PropTypes.string.isRequired};
+
+/** List this program’s crew assignments and planned visits, optionally narrowed to visits at stake. */
+export function ProgramSchedule({board, atStake, schedulePath}) {
   const {program, sites} = board;
+  const stake = new Set(program.visitsAtStake);
+  const crews = atStake ? program.crew.filter(crew => stake.has(crew.siteId)) : program.crew;
+  const visits = Object.values(sites).filter(site => site.lifecycle !== 'on_air' && site.plan.plannedDay && (!atStake || stake.has(site.id)))
+    .sort((a, b) => a.plan.plannedDay.localeCompare(b.plan.plannedDay) || a.id.localeCompare(b.id));
   return (
-    <div className="grid gap-4 2xl:grid-cols-2">
-      <section className="card min-w-0 p-4" aria-labelledby="morning-title">
-        <h2 id="morning-title" className="text-base font-semibold text-ink">This morning</h2>
-        <ol className="mt-3 divide-y divide-line">
-          {morningActivity(program).map(entry => (
-            <li key={entry.id} className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 py-2">
-              <time className="meta" dateTime={entry.at}>{formatDate(entry.at, true)}</time>
-              <div>
-                <p className="font-semibold">{entry.verb} · {entry.siteName}</p>
-                <p className="meta">{entry.actorLabel} · {entry.detail}</p>
-              </div>
-            </li>
-          ))}
-        </ol>
-      </section>
-      <section className="card min-w-0 p-4" aria-labelledby="crew-title">
-        <h2 id="crew-title" className="text-base font-semibold text-ink">Crews this week</h2>
-        <ul className="mt-3 divide-y divide-line">
-          {program.crew.map(crew => (
-            <li key={crew.id} className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 py-2">
-              <time className="meta" dateTime={crew.shiftAt ?? crew.shiftDay}>{formatDate(crew.shiftAt ?? crew.shiftDay, true)}</time>
-              <div>
-                <p className="font-semibold">{crew.siteId ? sites[crew.siteId].name : 'Hold day'}</p>
+    <div className="space-y-5">
+      <header className="flex flex-wrap items-center justify-between gap-2">
+        <h1>Schedule</h1>
+        {atStake && <Link className="btn" to={schedulePath}>Show full schedule</Link>}
+      </header>
+      {atStake && <p className="font-semibold">Visits at stake this week</p>}
+      <div className="grid gap-4 xl:grid-cols-2">
+        <section className="card p-4" aria-labelledby="crew-title">
+          <h2 className="program-section-title" id="crew-title">Crews this week</h2>
+          {crews.length ? <ul className="mt-2 divide-y divide-line">
+            {crews.map(crew => (
+              <li key={crew.id} className="space-y-1 py-3">
+                <SiteControl sites={sites} siteId={crew.siteId} label={sites[crew.siteId]?.name ?? 'Hold day'} />
                 <p>{crew.state}</p>
-                {crew.leadId && <p className="meta">{personName(board, crew.leadId)} · Crew of {crew.size} · {crew.depot}</p>}
-              </div>
-            </li>
-          ))}
-        </ul>
-      </section>
-      <section className="card min-w-0 p-4" aria-labelledby="failures-title">
-        <h2 id="failures-title" className="text-base font-semibold text-ink">Failed visits this quarter</h2>
-        <ul className="mt-3 divide-y divide-line">
-          {program.failures.map(entry => (
-            <li key={entry.id} className="py-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                {sites[entry.siteId] ? (
-                  <Link className="font-semibold text-teal-ink underline-offset-4 hover:underline" to={sitePath(entry.siteId)}>{entry.name}</Link>
-                ) : <span className="font-semibold">{entry.name}</span>}
-                <span className={`badge ${entry.state === 'Open' ? 'risk-red' : 'risk-green'}`}>{entry.state}</span>
-              </div>
-              <p className="meta">{entry.siteId} · {formatDate(entry.whenAt ?? entry.whenDay, true)}</p>
-              <p className="mt-1">{entry.outcome}</p>
-              <p className="meta">{entry.detail}</p>
-            </li>
-          ))}
-        </ul>
-      </section>
-      <section className="card min-w-0 p-4" aria-labelledby="design-title">
-        <h2 id="design-title" className="text-base font-semibold text-ink">Not on the board yet</h2>
-        <ul className="mt-3 divide-y divide-line">
-          {program.design.map(entry => (
-            <li key={entry.siteId} className="grid gap-1 py-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-              <div>
-                <p className="font-semibold">{entry.name}</p>
-                <p className="meta">{entry.siteId} · {entry.neighborhood}</p>
-              </div>
-              <p className="meta sm:text-right">{entry.state} · {formatMonth(entry.targetMonth)}</p>
-            </li>
-          ))}
-        </ul>
-      </section>
+                <p className="meta"><time dateTime={crew.shiftAt ?? crew.shiftDay}>{formatDate(crew.shiftAt ?? crew.shiftDay, true)}</time>
+                  {crew.leadId && ` · ${personName(board, crew.leadId)} · Crew of ${crew.size} · ${crew.depot}`}</p>
+              </li>
+            ))}
+          </ul> : <p className="meta mt-2">No crew assignments to show.</p>}
+        </section>
+        <section className="card p-4" aria-labelledby="planned-title">
+          <h2 className="program-section-title" id="planned-title">Planned visits</h2>
+          {visits.length ? <ul className="mt-2 divide-y divide-line">
+            {visits.map(site => (
+              <li key={site.id} className="flex flex-wrap items-center justify-between gap-2 py-3">
+                <SiteControl sites={sites} siteId={site.id} label={site.name} />
+                <time className="meta" dateTime={site.plan.plannedDay}>{formatDate(site.plan.plannedDay)}</time>
+              </li>
+            ))}
+          </ul> : <p className="meta mt-2">No planned visits to show.</p>}
+        </section>
+      </div>
     </div>
   );
 }
 
-ProgramPanels.propTypes = {board: PropTypes.object.isRequired};
+ProgramSchedule.propTypes = {board: PropTypes.object.isRequired, atStake: PropTypes.bool.isRequired, schedulePath: PropTypes.string.isRequired};
+
+/** Show the curated morning feed and quarterly failures for the current program. */
+export function ProgramActivity({board}) {
+  const {program, sites} = board;
+  const morning = morningActivity(program);
+  const {hash} = useLocation();
+  const failuresHeading = useRef(null);
+  useEffect(() => {
+    if (hash !== '#failures-title') return;
+    failuresHeading.current?.focus({preventScroll: true});
+    failuresHeading.current?.scrollIntoView?.({block: 'start'});
+  }, [hash]);
+  return (
+    <div className="space-y-5">
+      <h1>Activity</h1>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <section className="card p-4" aria-labelledby="morning-title">
+          <h2 id="morning-title" className="program-section-title">Morning log</h2>
+          {morning.length ? <ol className="mt-2 divide-y divide-line">
+            {morning.map(entry => (
+              <li key={entry.id} className="space-y-1 py-3">
+                <SiteControl sites={sites} siteId={entry.siteId} label={`${entry.verb} · ${entry.siteName}`} />
+                <p>{entry.detail}</p>
+                <p className="meta"><time dateTime={entry.at}>{formatDate(entry.at, true)}</time> · {entry.actorLabel}</p>
+              </li>
+            ))}
+          </ol> : <p className="meta mt-2">No morning activity.</p>}
+        </section>
+        <section className="card p-4" aria-labelledby="failures-title">
+          <h2 id="failures-title" ref={failuresHeading} tabIndex={-1} className="program-section-title">Failed visits this quarter</h2>
+          {program.failures.length ? <ul className="mt-2 divide-y divide-line">
+            {program.failures.map(entry => (
+              <li key={entry.id} className="space-y-1 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <SiteControl sites={sites} siteId={entry.siteId} label={entry.name} />
+                  <span className={`badge ${entry.state === 'Open' ? 'risk-red' : 'risk-green'}`}>{entry.state}</span>
+                </div>
+                <p className="meta">{entry.siteId} · <time dateTime={entry.whenAt ?? entry.whenDay}>{formatDate(entry.whenAt ?? entry.whenDay, true)}</time></p>
+                <p>{entry.outcome}</p>
+                <p className="meta">{entry.detail}</p>
+              </li>
+            ))}
+          </ul> : <p className="meta mt-2">No failed visits this quarter.</p>}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+ProgramActivity.propTypes = {board: PropTypes.object.isRequired};

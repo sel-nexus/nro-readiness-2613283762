@@ -3,10 +3,11 @@ import {useEffect, useRef, useState, useSyncExternalStore} from 'react';
 import PropTypes from 'prop-types';
 import {BrowserRouter, Link, Navigate, Route, Routes, matchPath, useLocation, useNavigate, useParams} from 'react-router-dom';
 import {SharedShell} from './components/SharedShell.jsx';
+import {ProgramActivity, ProgramSchedule} from './components/ProgramPanels.jsx';
 import {RestoreDialog} from './components/RestoreDialog.jsx';
 import LoginPage from './pages/LoginPage.jsx';
 import Portfolio, {ProgramBoard, ProgramList} from './pages/Portfolio.jsx';
-import {DEFAULT_PROGRAM, PROGRAMS, siteProgram} from './data/programs.js';
+import {DEFAULT_PROGRAM, PROGRAMS, programPath, siteProgram} from './data/programs.js';
 import ServiceHealth from './pages/ServiceHealth.jsx';
 import SiteWorkspace from './pages/SiteWorkspace.jsx';
 import {readSources, RESTORE_TITLE, selectShellHealth} from './services/sources.js';
@@ -146,9 +147,10 @@ function BoardRoutes({accessStore, programId, validProgram}) {
             <Route path="/" element={<Portfolio />} />
             <Route path="/portfolio" element={<Portfolio />} />
             <Route path="/board" element={<ProgramBoard board={board} programId={programId} query={query} />} />
-            <Route path="/schedule" element={<ProgramList board={board} page="Schedule" />} />
-            <Route path="/activity" element={<ProgramList board={board} page="Activity" />} />
-            <Route path="/approvals" element={<ProgramList board={board} page="Approvals" />} />
+            <Route path="/schedule" element={<ProgramSchedule board={board} schedulePath={programPath('/schedule', programId)}
+              atStake={new URLSearchParams(location.search).get('view') === 'at-stake'} />} />
+            <Route path="/activity" element={<ProgramActivity board={board} />} />
+            <Route path="/approvals" element={<ProgramList board={board} />} />
             <Route path="/sites/:siteId" element={
               <ReleasedSite board={board} actor={actor} store={store} notify={notify} />
             } />
