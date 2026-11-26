@@ -10,20 +10,43 @@ import {civilMillis, FRESHNESS_DAYS, RESCORE_NOTICE} from '../utils/readiness.js
 
 const EDIT_LIMIT = 'Only Operators can update evidence.';
 const HISTORY_LIMIT = 'Historical evidence is read-only.';
+const COLUMNS = [
+  'Prerequisite', 'Observed evidence status', 'Dependency', 'Quality', 'Source', 'Source time', 'Freshness', 'Owner', 'Update',
+];
+const REQUIREMENTS = {
+  Permit: 'Permit clearance', Civil: 'Civil works', Power: 'Power availability',
+  Transmission: 'Transmission readiness', Material: 'Material availability', Workforce: 'Crew availability',
+};
+
+/** Describe the recorded prerequisite without turning stale or disputed evidence into a block. */
+function dependencyFor(site, row, quality, crew) {
+  const requirement = REQUIREMENTS[row.row];
+  const fallback = row.flag === 'Mandatory' ? `${requirement} is required for installation.` : `${requirement} is monitored for the crew plan.`;
+  if (site.lifecycle !== 'open' || quality !== 'Current' || !['Not Ready', 'In progress'].includes(row.status)) return fallback;
+  if (site.id === 'NRO-W-1842' && row.row === 'Power' && site.holdActive && crew?.shiftDay === '2026-05-18' &&
+    row.status === 'Not Ready' && row.source === 'Northwind Power feed' && !row.ingestedAt) {
+    return 'Depends on the Northwind window. Blocks the 18 May crew.';
+  }
+  const recorded = row.detail || (!row.ingestedAt && site.proposal?.targetRow === row.row && site.blocker !== 'None' ? site.blocker : null);
+  if (!recorded) return fallback;
+  return row.flag === 'Watch' ? `${recorded.replace(/\.$/, '')}. ${fallback}` : recorded;
+}
 
 /** Label source age using calendar days without rounding freshness decisions. */
-function freshnessLabel(row, clock) {
-  const threshold = FRESHNESS_DAYS[row.row];
+function freshnessLabel(row, clock, freshness) {
+  const threshold = freshness[row.row];
   if (!row.sourceAt) return `No age · ${threshold}-day threshold`;
   const age = (civilMillis(`${clock.slice(0, 10)}T00:00:00`) - civilMillis(`${row.sourceAt.slice(0, 10)}T00:00:00`)) / 86400000;
   return `${age} ${age === 1 ? 'day' : 'days'} · ${threshold}-day threshold`;
 }
 
 /** Describe only actionable defects without treating disputed readings as verified. */
-function problemCopy(site, key, quality) {
+function problemCopy(site, key, quality, freshness) {
   const row = site.rows[key];
   if (key === 'Power' && quality === 'Current' && row.status === 'Not Ready') return 'Power is Not Ready. This site cannot be shown as Ready.';
-  if (site.id === 'NRO-W-1851' && key === 'Permit' && quality === 'Stale') return 'Permit evidence is older than 14 days. Confidence has been reduced.';
+  if (site.id === 'NRO-W-1851' && key === 'Permit' && quality === 'Stale' && freshness.Permit === FRESHNESS_DAYS.Permit) {
+    return 'Permit evidence is older than 14 days. Confidence has been reduced.';
+  }
   if (site.id === 'NRO-W-1855' && key === 'Material' && quality === 'Conflicting') return 'DPAM and DDL disagree on material. Resolve with Omar Shah before relying on this score.';
   if (site.id === 'NRO-W-1872' && key === 'Transmission' && quality === 'Missing') return 'Transmission has no evidence. The probability is Unavailable.';
   return quality !== 'Current' ? `${key} evidence: ${quality}.` : null;
@@ -63,14 +86,19 @@ function EvidenceEditor({row, onClose, onSave}) {
           {STATUSES.map(status => <option key={status}>{status}</option>)}
         </select>
         <label htmlFor="evidence-date">Evidence date and time</label>
-        <input id="evidence-date" name="sourceAt" type="datetime-local" step="1" max={BOARD_AT} defaultValue={row.sourceAt ?? ''} className="field"
-          aria-describedby={error ? 'evidence-error' : 'evidence-date-hint'} aria-invalid={Boolean(error)} />
+        <input
+          id="evidence-date" name="sourceAt" type="datetime-local" step="1" max={BOARD_AT}
+          defaultValue={row.sourceAt ?? ''} className="field"
+          aria-describedby={error ? 'evidence-error' : 'evidence-date-hint'} aria-invalid={Boolean(error)}
+        />
         <p id="evidence-date-hint" className="meta">Leave blank only when the status is Unavailable.</p>
         <label htmlFor="evidence-source">Source</label>
         <input id="evidence-source" name="source" className="field" required defaultValue={row.source} />
         <label htmlFor="evidence-note">Note (optional)</label>
         <textarea id="evidence-note" name="note" className="field" rows={3} />
-        {row.quality === 'Conflicting' && <p className="meta">Save only after reconciling the conflicting observations. This replaces the working row.</p>}
+        {row.quality === 'Conflicting' && (
+          <p className="meta">Save only after reconciling the conflicting observations. This replaces the working row.</p>
+        )}
         {error && <p id="evidence-error" role="alert" className="text-red">{error}</p>}
         <div className="mt-2 flex flex-wrap gap-2">
           <button type="submit" className="btn btn-primary">Save evidence</button>
@@ -94,6 +122,7 @@ export function EvidenceMatrix({board, site, actor, store, readiness, notify, ta
   const reason = open ? EDIT_LIMIT : HISTORY_LIMIT;
   const clock = site.plan.closedAt ?? BOARD_AT;
   const documents = Object.values(board.uploads).filter(doc => doc.siteId === site.id);
+  const crew = board.program.crew.find(item => item.siteId === site.id);
 
   useEffect(() => {
     if (!target) return;
@@ -131,18 +160,20 @@ export function EvidenceMatrix({board, site, actor, store, readiness, notify, ta
 
   return (
     <section className="space-y-3" aria-label="Evidence provenance" ref={matrix}>
-      {readiness.evidenceChanged && <p className="rounded-control border border-line bg-card p-3" role="status">{RESCORE_NOTICE}</p>}
+      {readiness.evidenceChanged && (
+        <p className="rounded-control border border-line bg-card p-3" role="status">{RESCORE_NOTICE}</p>
+      )}
       {ROW_ORDER.map(key => {
-        const copy = problemCopy(site, key, readiness.quality[key]);
+        const copy = problemCopy(site, key, readiness.quality[key], board.program.thresholds?.freshness ?? FRESHNESS_DAYS);
         return copy && <p key={key} className="rounded-control border border-line bg-amber-wash p-3 text-ink">{copy}</p>;
       })}
       {!editable && <p className="meta" id="evidence-update-reason">{reason}</p>}
-      <div className="card scroll-table" role="region" aria-label="Scrollable evidence matrix" tabIndex={0}>
+      <div className="card scroll-table relative" role="region" aria-label="Scrollable evidence matrix" tabIndex={0}>
         <table className="min-w-[62rem]">
-          <caption>Evidence matrix</caption>
+          <caption id="evidence-matrix" data-evidence-target tabIndex={-1}>Evidence matrix</caption>
           <thead>
             <tr>
-              {['Prerequisite', 'Status', 'Quality', 'Source', 'Source time', 'Freshness', 'Owner', 'Update'].map(label => (
+              {COLUMNS.map(label => (
                 <th key={label} scope="col">{label}</th>
               ))}
             </tr>
@@ -151,6 +182,7 @@ export function EvidenceMatrix({board, site, actor, store, readiness, notify, ta
             {ROW_ORDER.map(key => {
               const row = site.rows[key];
               const phone = board.users[row.ownerId]?.phone ?? DIRECTORY[row.ownerId]?.phone;
+              const phoneEnding = phone?.replace(/\D/g, '').slice(-4);
               const rowDocs = documents.filter(doc => doc.row === key);
               return (
                 <tr key={key}>
@@ -159,14 +191,23 @@ export function EvidenceMatrix({board, site, actor, store, readiness, notify, ta
                     <p className="meta">{row.flag}</p>
                   </th>
                   <td>{row.status}</td>
+                  <td className="min-w-[12rem]">{dependencyFor(site, row, readiness.quality[key], crew)}</td>
                   <td>{readiness.quality[key]}</td>
                   <td>
                     <details>
-                      <summary className="cursor-pointer font-medium text-teal-ink" data-evidence-target id={`evidence-${key}`}>{row.source}</summary>
-                      <p className="meta mt-1">Ingested: {row.ingestedAt ? formatDate(row.ingestedAt, true) : 'No timestamp'}</p>
+                      <summary
+                        className="cursor-pointer font-medium text-teal-ink"
+                        data-evidence-target id={`evidence-${key}`}
+                      >
+                        {row.source}
+                      </summary>
+                      <p className="meta mt-1">
+                        Ingested: {row.ingestedAt ? formatDate(row.ingestedAt, true) : 'No timestamp'}
+                      </p>
                       {row.observations.map((item, i) => (
                         <p key={i}>
-                          {item.source} · {item.status} · {item.sourceAt ? formatDate(item.sourceAt, true) : 'No timestamp'}
+                          {item.source} · {item.status} ·{' '}
+                          {item.sourceAt ? formatDate(item.sourceAt, true) : 'No timestamp'}
                           {item.ingestedAt ? ` · Ingested ${formatDate(item.ingestedAt, true)}` : ''}
                         </p>
                       ))}
@@ -174,20 +215,25 @@ export function EvidenceMatrix({board, site, actor, store, readiness, notify, ta
                     </details>
                     {rowDocs.map(doc => (
                       <details key={doc.id} className="mt-2 max-w-[25ch] break-words">
-                        <summary className="cursor-pointer text-teal-ink" data-evidence-target id={doc.id}>{doc.fileName}</summary>
+                        <summary className="cursor-pointer text-teal-ink" data-evidence-target id={doc.id}>
+                          {doc.fileName}
+                        </summary>
                         <p className="meta">
-                          {doc.sizeBytes.toLocaleString('en-GB')} bytes · {doc.mediaType} · {personName(board, doc.addedBy)} · {formatDate(doc.addedAt, true)}
+                          {doc.sizeBytes.toLocaleString('en-GB')} bytes · {doc.mediaType} ·{' '}
+                          {personName(board, doc.addedBy)} · {formatDate(doc.addedAt, true)}
                         </p>
                         {doc.extractedText && <p className="mt-1">{doc.extractedText}</p>}
                       </details>
                     ))}
-                    {rowDocs.some(doc => doc.extractionState === 'failed') && <p className="meta mt-2">{EXTRACTION_FAILED}</p>}
+                    {rowDocs.some(doc => doc.extractionState === 'failed') && (
+                      <p className="meta mt-2">{EXTRACTION_FAILED}</p>
+                    )}
                   </td>
                   <td>{row.sourceAt ? formatDate(row.sourceAt, true) : 'No timestamp'}</td>
-                  <td>{freshnessLabel(row, clock)}</td>
+                  <td>{freshnessLabel(row, clock, board.program.thresholds?.freshness ?? FRESHNESS_DAYS)}</td>
                   <td>
                     <p>{personName(board, row.ownerId)}</p>
-                    {phone && <a href={`tel:${phone.replace(/[^+\d]/g, '')}`}>{phone}</a>}
+                    {phoneEnding?.length === 4 && <p className="meta">Phone ending in {phoneEnding}</p>}
                   </td>
                   <td>
                     <button type="button" className="btn" aria-label={`Update ${key}`} aria-disabled={!editable}
@@ -198,8 +244,11 @@ export function EvidenceMatrix({board, site, actor, store, readiness, notify, ta
                       }}>Update</button>
                     {canAttach && (
                       <div className="mt-2">
-                        <input className="peer sr-only" type="file" id={`attach-${key}`} aria-label={`Attach evidence to ${key}`}
-                          accept=".pdf,.png,.jpg" onChange={event => attach(event, key)} />
+                        <input
+                          className="peer sr-only" type="file" id={`attach-${key}`}
+                          aria-label={`Attach evidence to ${key}`}
+                          accept=".pdf,.png,.jpg" onChange={event => attach(event, key)}
+                        />
                         <label
                           className="cursor-pointer text-teal-ink peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-focus"
                           htmlFor={`attach-${key}`}>

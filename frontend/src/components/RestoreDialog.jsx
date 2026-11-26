@@ -27,7 +27,7 @@ export function RestoreDialog({store, intent, onDismiss, onRestored}) {
 
   /** Publish success only after the board and journal have been fully committed. */
   function confirm() {
-    const result = restoreMorning(store, {...intent, commandId: newCommandId(), confirmed: true});
+    const result = restoreMorning(store, {...intent, commandId: newCommandId(), confirmed: true, allPrograms: true});
     if (!result.ok) { setError(result.error.message); return; }
     dismiss();
     onRestored();
@@ -40,7 +40,7 @@ export function RestoreDialog({store, intent, onDismiss, onRestored}) {
       onClick={event => { if (event.target === event.currentTarget) dismiss(); }}>
       <div className="space-y-4 p-5">
         <h2 id="restore-title" className="text-base font-semibold">{RESTORE_TITLE}</h2>
-        <p id="restore-description">Restores West Metro to the 09:40 record. Evidence edits and files added since then are removed.</p>
+        <p id="restore-description">Restores all programs to their morning records, including the 09:40 West Metro snapshot. Working changes, files, scenarios and thresholds are reset. You stay signed in.</p>
         {error && <p role="alert" className="text-red">{error}</p>}
         <div className="flex flex-wrap justify-end gap-2">
           <button ref={cancel} type="button" className="btn" onClick={dismiss}>Cancel</button>

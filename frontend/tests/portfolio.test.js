@@ -1,9 +1,42 @@
 /** Verify released-site projections, fixed-clock labels and independent program records. */
 import {describe, expect, it} from 'vitest';
 import {makeBaseline} from '../src/data/baseline.js';
-import {exceptionsFor, FILTERS, formatDate, formatMonth, morningActivity, orderedNotices, personName, relativeDay, searchSites, selectPortfolio, sourceSummary} from '../src/utils/portfolio.js';
+import {makeProgramBoard, programPath} from '../src/data/programs.js';
+import {exceptionsFor, FILTERS, formatDate, formatMonth, morningActivity, orderedNotices, personName, relativeDay, searchSites, selectPortfolio, sourceSummary, withOperationalParams} from '../src/utils/portfolio.js';
 
 describe('portfolio triage', () => {
+  it.each([
+    ['west-metro', 'Harbor Point', 'NRO-W-', 16, 8, 5, 3, 3, 50],
+    ['east-bay', 'Delta Landing', 'NRO-E-', 12, 9, 2, 1, 0, 75],
+    ['north-valley', 'Orchard Exchange', 'NRO-N-', 2, 1, 1, 0, 0, 50],
+    ['south-shore', 'Dune Crossing', 'NRO-S-', 4, 1, 2, 1, 1, 25],
+  ])('keeps Board totals, trend and operating records in %s', (id, name, prefix, total, Green, Amber, Red, failed, lastShare) => {
+    const board = makeProgramBoard(id);
+    const model = selectPortfolio(board);
+    expect(model).toMatchObject({total, risk: {Green, Amber, Red}, failed});
+    expect(model.visible.map(site => site.id).every(siteId => siteId.startsWith(prefix))).toBe(true);
+    expect(model.visible.map(site => site.name)).toContain(name);
+    expect(model.trend).toHaveLength(14);
+    expect(model.trend).toEqual(board.program.trend);
+    expect(model.trend.at(-1)).toEqual({day: '2026-05-12', greenShare: lastShare});
+    expect(board.program.crew.filter(item => item.siteId).map(item => item.siteId).every(siteId => siteId.startsWith(prefix))).toBe(true);
+    expect(morningActivity(board.program).map(item => item.siteId).every(siteId => siteId.startsWith(prefix))).toBe(true);
+    expect(board.program.failures.map(item => item.siteId).every(siteId => siteId.startsWith(prefix))).toBe(true);
+    expect(selectPortfolio(board, {query: id === 'west-metro' ? 'Delta Landing' : 'Harbor Point'}).visible).toEqual([]);
+  });
+
+  it('links counts and owners to the same records used by the scoped Board', () => {
+    const board = makeBaseline();
+    expect(selectPortfolio(board, {chip: 'At risk'}).visible).toHaveLength(selectPortfolio(board).atRisk);
+    expect(selectPortfolio(board, {chip: 'On air this month'}).visible.map(site => site.name)).toEqual(['Fruitvale', 'Temescal']);
+    const {ownerId} = board.sites['NRO-W-1842'];
+    const scoped = selectPortfolio(board, {owner: ownerId, chip: 'At risk'});
+    expect(scoped.visible.map(site => site.name)).toEqual(['Harbor Point', 'Point Richmond']);
+    expect(scoped).toMatchObject({total: 16, atRisk: 8});
+    expect(selectPortfolio(board, {owner: 'unknown'}).visible).toEqual([]);
+    const path = withOperationalParams(programPath('/board', 'east-bay'), {owner: ownerId, filter: 'At risk'});
+    expect(path).toBe(`/board?program=east-bay&owner=${ownerId}&filter=At+risk`);
+  });
   it('reconciles the full board and keeps design and off-board history out of released rows', () => {
     const board = makeBaseline();
     const model = selectPortfolio(board);

@@ -1,174 +1,236 @@
 /** Compose the full-board summary with independently filtered released sites. */
 import {useState} from 'react';
 import PropTypes from 'prop-types';
-import {Link} from 'react-router-dom';
+import {Link, useNavigate, useSearchParams} from 'react-router-dom';
 import {Icon} from '../components/icons.jsx';
+import {ExceptionSummary} from '../components/ProgramPanels.jsx';
 import {ReadinessTable} from '../components/ReadinessTable.jsx';
-import {ProgramPanels, SiteSchematic} from '../components/ProgramPanels.jsx';
-import {MODEL, MORNING_SCORE_AT} from '../data/register.js';
-import {SCENARIOS} from '../services/sources.js';
-import {authorize, INTENT} from '../utils/access.js';
-import {FILTERS, formatDate, NO_MATCH, RISK_STYLE, selectPortfolio, sitePath} from '../utils/portfolio.js';
+import {PROGRAMS, makeProgramBoard, programPath} from '../data/programs.js';
+import {FILTERS, formatDate, formatMonth, personName, RISK_LABELS, RISK_STYLE, selectPortfolio, sitePath, withOperationalParams} from '../utils/portfolio.js';
+import {rowQuality} from '../utils/readiness.js';
 
-const HARBOR = ['NRO-W-1842', 'Harbor Point power blocker'];
-const FOCUS = {
-  A: [['NRO-W-1847', 'Civic Center dispatch'], HARBOR],
-  B: [['NRO-W-1851', 'Lakeside stale permit'], ['NRO-W-1855', 'Market DAS material conflict'],
-    ['NRO-W-1860', 'Hillcrest low confidence'], HARBOR],
+const catalog = Object.entries(PROGRAMS).map(([id, meta]) => ({id, ...meta, seed: makeProgramBoard(id)}));
+const focusEvidence = {
+  'west-metro': {key: 'Power'},
+  'east-bay': {key: 'Power', morningStatus: 'Not Ready', morningDetail: 'Utility handoff incomplete', held: true},
+  'north-valley': {key: 'Permit', morningStatus: 'In progress', morningDetail: 'Pilot permit under review', held: false},
+  'south-shore': {key: 'Permit', morningStatus: 'Not Ready', morningDetail: 'Site access permit suspended', held: true},
 };
 
-/** Display full program KPIs, exception shortcuts and the released-site register. */
-export default function Portfolio({board, actor, query}) {
-  const [chip, setChip] = useState('All');
-  const [exception, setException] = useState(null);
+/** List all program cards and their design queues without exposing workshop diagnostics. */
+export default function Portfolio() {
+  return (
+    <div className="space-y-5">
+      <header>
+        <h1>Programs</h1>
+        <p className="mt-2 text-muted">Open a program to review its readiness board, crew plans and decisions.</p>
+      </header>
+      <ul aria-label="Available programs" className="grid gap-4">
+        {catalog.map(({id, name, region, quarter, state, lead, lastUpdate, seed}) => (
+          <li key={id}>
+            <article className="card space-y-4 p-4 sm:p-6" aria-labelledby={`program-${id}`}>
+              <header className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-muted">{region} · {quarter} · {state}</p>
+                  <h2 id={`program-${id}`} className="program-section-title">{name}</h2>
+                </div>
+                <Link className="btn" to={programPath('/board', id)} aria-label={`Open ${name}`}>
+                  Open Board <Icon name="arrow" />
+                </Link>
+              </header>
+              <p>
+                <strong>{Object.keys(seed.sites).length}</strong> sites on the Board ·{' '}
+                <strong>{seed.program.design.length}</strong> in design
+              </p>
+              <p className="text-muted">Lead: {lead} · {lastUpdate}</p>
+              <section className="program-group border-t border-line p-3" aria-label={`${name} design queue`}>
+                <h3>Design queue</h3>
+                {seed.program.design.length ? (
+                  <ul className="mt-2 divide-y divide-line">
+                    {seed.program.design.map(entry => (
+                      <li key={entry.siteId} className="flex flex-wrap justify-between gap-x-4 gap-y-1 py-2">
+                        <div>
+                          <p className="font-medium">{entry.name}</p>
+                          <p className="meta">{entry.siteId} · {entry.neighborhood}</p>
+                          {entry.blocker && (
+                            <p className="meta">
+                              {entry.blocker} · {personName(seed, entry.ownerId)} · Planning estimate: {entry.probability}%
+                            </p>
+                          )}
+                        </div>
+                        <p className="meta">
+                          {entry.state} · {entry.plannedDay ? formatDate(entry.plannedDay) : formatMonth(entry.targetMonth)}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                ) : <p className="mt-1 text-muted">No sites in design.</p>}
+              </section>
+            </article>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Summarize the focused prerequisite without treating an observation as dispatch authority. */
+function focusedDecision(board, programId, site) {
+  if (site.lifecycle === 'on_air') return `${site.name} is on air.`;
+  if (site.lifecycle === 'dispatched') return `${site.name} has been dispatched.`;
+
+  const {key, morningStatus, morningDetail, held} = focusEvidence[programId];
+  const row = site.rows[key];
+  const decision = site.holdActive ? `${site.name} is on hold.` : `Review ${site.name} before committing a crew.`;
+  const quality = rowQuality(row, undefined, board.program.thresholds?.freshness);
+  if (quality !== 'Current' || row.status === 'Unavailable') return `${decision} Verify ${key} evidence.`;
+  if (site.holdActive === held && row.status === morningStatus && row.detail === morningDetail) {
+    return PROGRAMS[programId].decision;
+  }
+  if (row.status === 'Not Ready') return `${decision} ${key} is not ready.`;
+  return `${decision} ${key} evidence shows ${row.status}.`;
+}
+
+/** Render the immediate decision, scope-wide signals and filtered site register. */
+export function ProgramBoard({board, programId, query}) {
+  const [params] = useSearchParams();
+  const navigate = useNavigate();
   const [sort, setSort] = useState(null);
-  const model = selectPortfolio(board, {query, chip, sort, exception});
-  const {program} = board;
-  const names = sites => sites.map(site => site.name).join(' and ');
+  const filter = params.get('filter');
+  const chip = [...FILTERS, 'At risk', 'On air this month'].includes(filter) ? filter : 'All';
+  const owner = params.get('owner');
+  const exception = params.get('exception');
+  const model = selectPortfolio(board, {query, chip, sort, exception, owner});
+  const {cluster} = board.program;
+  const {focus} = PROGRAMS[programId];
+  const focusSite = board.sites[focus];
+  const immediateDecision = focusedDecision(board, programId, focusSite);
+  const boardPath = programPath('/board', programId);
+  const trendLabel = model.trend.map(({day, greenShare}) => `${formatDate(day)} ${greenShare}%`).join(', ');
+  const activeFilters = [owner && `Next owner: ${personName(board, owner)}`, !FILTERS.includes(chip) && chip];
   const stats = [
-    ['Sites at risk', model.atRisk, `of ${model.total} sites`, `${model.hold} on hold · ${model.dispatched} dispatched`],
-    ['Visits at stake this week', model.visitsAtStake.length, '', names(model.visitsAtStake)],
-    ['Failed visits this quarter', model.failed, '', `${model.failedOpen} still open`],
-    ['On air in May', model.onAir.length, '', names(model.onAir)],
+    ['Sites at risk', model.atRisk, `of ${model.total} sites`, withOperationalParams(boardPath, {filter: 'At risk'})],
+    ['Visits at stake this week', model.visitsAtStake.length, null, withOperationalParams(programPath('/schedule', programId), {view: 'at-stake'})],
+    ['Failed visits this quarter', model.failed, `${model.failedOpen} still open`, `${programPath('/activity', programId)}#failures-title`],
+    ['On air this month', model.onAir.length, null, withOperationalParams(boardPath, {filter: 'On air this month'})],
   ];
 
-  /** Flip only the chosen comparator, including the initial ascending Risk heading. */
+  /** Flip the chosen comparator, including the initial ascending Risk heading. */
   function changeSort(key) {
     setSort(current => ({key, direction: (current?.key === key && current.direction === 'ascending') || (!current && key === 'risk') ? 'descending' : 'ascending'}));
   }
 
   return (
-    <div className="space-y-5">
-      <section className="flex flex-wrap items-start justify-between gap-3" aria-labelledby="portfolio-title">
+    <div className="space-y-5" aria-label="Program Board">
+      <section className="flex flex-wrap items-end justify-between gap-3" aria-labelledby="portfolio-title">
         <div>
-          <h1 id="portfolio-title" className="text-title font-semibold text-ink">{program.cluster}</h1>
-          <p className="meta mt-1">
-            {model.total} sites on the board · {program.design.length} still in design · scored {formatDate(MORNING_SCORE_AT, true)} with {MODEL}.
-          </p>
+          <h1 id="portfolio-title">{cluster}</h1>
+          <p className="mt-2 text-lg font-semibold">{immediateDecision}</p>
         </div>
-        {(authorize(actor, INTENT.evidence) || authorize(actor, INTENT.approve)) && (
-          <Link className="btn btn-primary" to={sitePath('NRO-W-1842')}>
-            Review Harbor Point
-            <Icon name="arrow" />
-          </Link>
-        )}
+        <Link className="btn btn-primary" to={sitePath(focus)}>
+          Review {focusSite.name}
+          <Icon name="arrow" />
+        </Link>
       </section>
-      {FOCUS[board.scenario] && (
-        <section className="flex flex-wrap items-baseline gap-x-4 gap-y-1" aria-label="Workshop focus">
-          <h2 className="meta font-semibold">{SCENARIOS[board.scenario]} workshop focus</h2>
-          <ul className="flex flex-wrap gap-x-3 gap-y-1 text-meta">
-            {FOCUS[board.scenario].map(([id, label]) => (
-              <li key={id}>
-                <Link className="font-medium text-teal-ink underline-offset-4 hover:underline" to={sitePath(id)}>{label}</Link>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-      <section aria-label="Portfolio totals" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {stats.map(([label, value, qualifier, detail]) => (
-          <article className="card p-4" key={label}>
-            <h2 className="font-medium text-ink">{label}</h2>
-            <p className="mt-2 flex items-baseline gap-1.5 text-kpi font-semibold text-ink">
-              {value}
-              {qualifier && <span className="meta font-normal">{qualifier}</span>}
-            </p>
-            <p className="meta mt-1">{detail}</p>
-          </article>
+      <section aria-label="Portfolio totals" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {stats.map(([label, value, detail, to]) => (
+          <Link
+            className="btn !flex !h-full !min-w-0 !flex-col !items-start !justify-start !gap-2 !whitespace-normal !p-4 text-left"
+            key={label}
+            to={to}
+          >
+            <span className="font-medium">{label}</span>
+            <span className="flex items-baseline gap-1.5 tabular-nums">
+              <strong className="text-kpi text-[var(--primary)]">{value}</strong>
+              {detail && <span className="meta">{detail}</span>}
+            </span>
+          </Link>
         ))}
       </section>
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <section className="card p-4" aria-labelledby="readiness-trend">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <h2 id="readiness-trend" className="text-base font-semibold text-ink">Portfolio readiness</h2>
-              <p className="meta">Share of the board at green.</p>
-            </div>
-            <svg
-              role="img"
-              aria-label={`14-day Green share trend: ${program.trend.map(entry => `${entry.greenShare}%`).join(', ')}`}
-              viewBox="0 0 130 40"
-              className="h-12 w-32 shrink-0"
-            >
-              <path aria-hidden="true" d="M0 34H130M0 10H130" className="stroke-line" />
-              <polyline
-                points={program.trend.map((entry, index) => `${2 + index * 9.7},${82 - entry.greenShare}`).join(' ')}
-                className="fill-none stroke-teal"
-                strokeWidth="2"
-                strokeLinejoin="round"
+      <section className="card grid gap-4 p-4 md:grid-cols-2" aria-label="Portfolio readiness">
+        <div>
+          <h2 className="program-section-title">Risk distribution</h2>
+          <div aria-hidden="true" className="mt-3 flex h-2 gap-0.5 overflow-hidden">
+            {Object.entries(model.risk).map(([risk, value]) => value > 0 && (
+              <span
+                key={risk}
+                className={risk === 'Green' ? 'program-good-fill' : RISK_STYLE[risk].fill}
+                style={{flexGrow: value}}
               />
-            </svg>
-          </div>
-          <div aria-hidden="true" className="mt-3 flex h-2 gap-0.5 overflow-hidden rounded-full">
-            {Object.entries(model.risk).map(([risk, value]) => value > 0 && <span key={risk} className={RISK_STYLE[risk].fill} style={{flexGrow: value}} />)}
+            ))}
           </div>
           <ul className="mt-2 flex flex-wrap gap-3">
             {Object.entries(model.risk).map(([risk, value]) => (
               <li key={risk} className={`inline-flex items-center gap-1 text-meta ${RISK_STYLE[risk].ink}`}>
-                <Icon name={risk} />
-                {risk} {value}
+                <Icon name={risk} /> {RISK_LABELS[risk]} {value}
               </li>
             ))}
           </ul>
-        </section>
-        <section className="card p-4" aria-labelledby="exception-title">
-          <h2 id="exception-title" className="text-base font-semibold text-ink">Exceptions</h2>
-          <ul className="mt-2 grid gap-2 sm:grid-cols-2">
-            {model.exceptions.map(group => (
-              <li key={group.id} className="min-w-0">
-                <button
-                  type="button"
-                  className={`rounded-control border px-2 py-1 font-semibold ${
-                    exception === group.id ? 'border-teal bg-green-wash text-teal-ink' : 'border-transparent text-ink hover:bg-surface'}`}
-                  aria-pressed={exception === group.id}
-                  onClick={() => {
-                    setChip('All');
-                    setException(exception === group.id ? null : group.id);
-                  }}
-                >
-                  {group.sites.length} {group.label}
-                </button>
-                <ul className="flex flex-wrap gap-x-2 px-2 text-meta">
-                  {group.sites.map(site => (
-                    <li key={site.id}>
-                      <Link className="text-teal-ink underline-offset-4 hover:underline" to={sitePath(site.id)}>{site.name}</Link>
-                    </li>
-                  ))}
-                </ul>
-              </li>
-            ))}
-          </ul>
-        </section>
-      </div>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="program-section-title">14-day readiness trend</h2>
+            <p className="meta">Recorded share of sites rated Good</p>
+          </div>
+          {model.trend.length ? (
+            <svg role="img" aria-label={`14-day Good share trend: ${trendLabel}`}
+              viewBox="0 0 130 40" className="h-12 w-32 shrink-0">
+              <path d="M0 34H130M0 10H130" className="stroke-line" />
+              <polyline points={model.trend.map(({greenShare}, i) => `${2 + i * 9.7},${38 - 0.36 * greenShare}`).join(' ')}
+                className="fill-none stroke-teal" strokeWidth="2" strokeLinejoin="round" />
+            </svg>
+          ) : <p className="meta">No recorded trend.</p>}
+        </div>
+      </section>
+      <ExceptionSummary groups={model.exceptions} active={exception} boardPath={boardPath} />
       <section aria-label="Released-site filters" className="space-y-2">
         <div className="flex flex-wrap gap-2">
           {FILTERS.map(label => (
-            <button
-              key={label}
-              type="button"
-              aria-pressed={!exception && chip === label}
-              className={`rounded-full border px-3 py-1 text-meta font-semibold ${
-                !exception && chip === label ? 'border-teal bg-green-wash text-teal-ink' : 'border-line bg-card text-ink hover:border-muted'}`}
-              onClick={() => {
-                setChip(label);
-                setException(null);
-              }}
-            >
+            <button key={label} type="button" aria-pressed={!exception && chip === label}
+              className={`btn ${!exception && chip === label ? 'border-teal bg-surface' : ''}`}
+              onClick={() => navigate(withOperationalParams(boardPath, {filter: label === 'All' ? null : label, owner}))}>
               {label}
             </button>
           ))}
         </div>
-        <p role="status" className="meta">
-          Showing {model.visible.length} of {model.total} sites.{!model.visible.length && query.trim() ? ` ${NO_MATCH}` : ''}
-        </p>
+        {(owner || !FILTERS.includes(chip)) && (
+          <p className="flex flex-wrap items-center gap-2">
+            <span>{activeFilters.filter(Boolean).join(' · ')}</span>
+            <Link className="btn" to={boardPath}>Clear filters</Link>
+          </p>
+        )}
+        <p role="status" className="meta">Showing {model.visible.length} of {model.total} sites.</p>
+        <ReadinessTable board={board} sites={model.visible} sort={sort} onSort={changeSort}
+          ownerPath={ownerId => withOperationalParams(boardPath, {owner: ownerId})} />
       </section>
-      <div className="grid items-start gap-4 min-[1560px]:grid-cols-[minmax(0,1fr)_230px]">
-        <ReadinessTable board={board} sites={model.visible} sort={sort} onSort={changeSort} />
-        <SiteSchematic sites={model.visible} />
-      </div>
-      <ProgramPanels board={board} />
     </div>
   );
 }
 
-Portfolio.propTypes = {board: PropTypes.object.isRequired, actor: PropTypes.object.isRequired, query: PropTypes.string.isRequired};
+ProgramBoard.propTypes = {board: PropTypes.object.isRequired, programId: PropTypes.string.isRequired, query: PropTypes.string.isRequired};
+
+/** Present a temporary pending-site list until the approval workflow is implemented. */
+export function ProgramList({board}) {
+  const {sites} = board;
+  const approvals = Object.values(sites).filter(site => site.proposal?.state === 'Pending approval');
+  return (
+    <div className="space-y-5">
+      <h1>Approvals</h1>
+      <section className="card p-4" aria-labelledby="pending-approvals">
+        <h2 id="pending-approvals" className="program-section-title">Waiting on the program manager</h2>
+        {approvals.length ? (
+          <ul className="mt-2 divide-y divide-line">
+            {approvals.map(site => (
+              <li key={site.id} className="space-y-2 py-3">
+                <Link className="btn" to={`${sitePath(site.id)}?tab=approval`}>{site.name}</Link>
+                <p>{site.proposal.impact}</p>
+              </li>
+            ))}
+          </ul>
+        ) : <p className="pt-2 text-muted">No records for this program.</p>}
+      </section>
+    </div>
+  );
+}
+
+ProgramList.propTypes = {board: PropTypes.object.isRequired};

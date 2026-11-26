@@ -1,10 +1,17 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import {webcrypto} from 'node:crypto';
+import {createHash, webcrypto} from 'node:crypto';
 import {cleanup, render, screen, waitFor, within} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import App from '../src/App.jsx';
+
+import {DEFAULT_PROGRAM, makeProgramBoard} from '../src/data/programs.js';
+import {continueAs} from '../src/utils/access.js';
+import {PERSON} from '../src/data/people.js';
+import {createBrowserStore} from '../src/utils/storage.js';
+
+const HARBOR_TITLE = 'Harbor Point is Critical. Hold the 18 May crew. Power is not ready.';
 
 beforeEach(() => {
   window.history.replaceState(null, '', '/login');
@@ -22,13 +29,19 @@ async function openPortfolio() {
   const user = userEvent.setup();
   render(<App />);
   await user.click(await screen.findByRole('button', {name: 'Continue as Marcus Hale'}));
-  await screen.findByRole('heading', {name: 'West Metro Cluster 4', level: 1});
+  await screen.findByRole('heading', {name: 'Programs', level: 1});
   return user;
 }
 
+async function openBoard(user) {
+  await user.click(screen.getByRole('link', {name: 'Open West Metro Cluster 4'}));
+  await screen.findByRole('heading', {name: 'West Metro Cluster 4', level: 1});
+}
+
 async function openHarborPoint(user) {
+  await openBoard(user);
   await user.click(screen.getByRole('link', {name: 'Review Harbor Point'}));
-  await screen.findByRole('heading', {name: 'Harbor Point', level: 1});
+  await screen.findByRole('heading', {name: HARBOR_TITLE, level: 1});
   return screen.getByRole('combobox', {name: 'Search site id or name'});
 }
 
@@ -41,7 +54,7 @@ describe('login form', () => {
     await user.type(screen.getByLabelText('Password'), `Nr0-${name.split(' ')[0]}#1842`);
     await user.click(screen.getByRole('button', {name: 'Sign in', exact: true}));
 
-    expect(await screen.findByRole('heading', {name: 'West Metro Cluster 4', level: 1})).toBeVisible();
+    expect(await screen.findByRole('heading', {name: 'Programs', level: 1})).toBeVisible();
     expect(screen.getByRole('button', {name: `${name} Rollout Manager`})).toBeVisible();
     expect(screen.queryByRole('heading', {name: 'Sign in'})).not.toBeInTheDocument();
   });
@@ -77,12 +90,12 @@ describe('shell site lookup', () => {
     const results = screen.getByRole('listbox', {name: 'Matching sites'});
     expect(within(results).getAllByRole('option')).toHaveLength(2);
     expect(within(results).queryByRole('option', {selected: true})).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', {name: 'Harbor Point', level: 1})).toBeVisible();
+    expect(screen.getByRole('heading', {name: HARBOR_TITLE, level: 1})).toBeVisible();
 
     await user.keyboard('{ArrowDown}');
     expect(within(results).getByRole('option', {selected: true})).toHaveTextContent('Point Richmond · NRO-W-1891');
     await user.keyboard('{Enter}');
-    expect(await screen.findByRole('heading', {name: 'Point Richmond', level: 1})).toBeVisible();
+    expect(await screen.findByRole('heading', {name: /^Point Richmond is /, level: 1})).toBeVisible();
     expect(screen.queryByRole('listbox', {name: 'Matching sites'})).not.toBeInTheDocument();
   });
 
@@ -92,20 +105,21 @@ describe('shell site lookup', () => {
     await user.type(lookup, 'NRO-W-1902{Enter}');
 
     expect(screen.getByText('No site matches that name in West Metro Cluster 4.')).toBeVisible();
-    expect(screen.queryByRole('option')).not.toBeInTheDocument();
+    expect(within(screen.getByRole('listbox', {name: 'Matching sites'})).queryByRole('option')).not.toBeInTheDocument();
     expect(lookup).toHaveAttribute('aria-expanded', 'true');
     await user.keyboard('{Escape}');
     expect(lookup).toHaveAttribute('aria-expanded', 'false');
     expect(lookup).toHaveFocus();
-    expect(screen.getByRole('heading', {name: 'Harbor Point', level: 1})).toBeVisible();
+    expect(screen.getByRole('heading', {name: HARBOR_TITLE, level: 1})).toBeVisible();
   });
 });
 
 describe('portfolio controls', () => {
   it('intersects search and risk filters, shows an empty result, and resets to the full register', async () => {
     const user = await openPortfolio();
+    await openBoard(user);
     const register = within(screen.getByRole('table', {name: 'Site readiness register'}));
-    const search = screen.getByRole('searchbox', {name: 'Search site id or name'});
+    const search = screen.getByRole('combobox', {name: 'Search site id or name'});
     const filters = within(screen.getByRole('region', {name: 'Released-site filters'}));
     await user.type(search, ' 1842 ');
     expect(filters.getByRole('status')).toHaveTextContent('Showing 1 of 16 sites.');
@@ -114,7 +128,7 @@ describe('portfolio controls', () => {
 
     await user.click(filters.getByRole('button', {name: 'Green', exact: true}));
     expect(filters.getByRole('button', {name: 'Green', pressed: true})).toBeVisible();
-    expect(filters.getByRole('status')).toHaveTextContent('Showing 0 of 16 sites. No site matches that name');
+    expect(filters.getByRole('status')).toHaveTextContent('Showing 0 of 16 sites.');
     expect(register.queryByRole('rowheader')).not.toBeInTheDocument();
     expect(screen.getByRole('region', {name: 'Portfolio totals'})).toHaveTextContent(/8\s*of 16 sites/);
 
@@ -126,6 +140,7 @@ describe('portfolio controls', () => {
 
   it('toggles readiness sort direction and keeps on-air sites after both orderings', async () => {
     const user = await openPortfolio();
+    await openBoard(user);
     const register = within(screen.getByRole('table', {name: 'Site readiness register'}));
     const readiness = register.getByRole('columnheader', {name: 'Readiness'});
     const sort = within(readiness).getByRole('button', {name: 'Readiness'});
@@ -140,4 +155,148 @@ describe('portfolio controls', () => {
     expect(register.getAllByRole('rowheader')[0]).toHaveTextContent('Civic Center');
     expect(register.getAllByRole('rowheader').at(-1)).toHaveTextContent('Temescal');
   });
+});
+
+it('lists the four jobs, with original West Metro and North Valley design queues', async () => {
+  await openPortfolio();
+  const cards = within(screen.getByRole('list', {name: 'Available programs'}));
+  expect(cards.getAllByRole('article')).toHaveLength(4);
+  const west = within(cards.getByRole('article', {name: 'West Metro Cluster 4'}));
+  expect(west.getByRole('region', {name: 'West Metro Cluster 4 design queue'})).toHaveTextContent('Albany Hill');
+  expect(west.getByText(/Lead: Priya Raman/)).toHaveTextContent('Last scored 12 May 2026, 09:34');
+  const north = within(cards.getByRole('article', {name: 'North Valley Cluster 1'}));
+  expect(within(north.getByRole('region', {name: 'North Valley Cluster 1 design queue'})).getAllByRole('listitem')).toHaveLength(6);
+  expect(north.getByText(/sites on the Board/)).toHaveTextContent('2 sites on the Board · 6 in design');
+  expect(screen.getByText('Sources synced 6 min ago')).toBeVisible();
+});
+
+it('switches scoped searches, notifications, queues and site links without retaining old results', async () => {
+  const user = await openPortfolio();
+  const nav = within(screen.getByRole('navigation', {name: 'Program', exact: true}));
+  expect(nav.getAllByRole('link').map(link => link.textContent)).toEqual(['Programs', 'Board', 'Schedule', 'Activity', 'Approvals']);
+  const selector = () => screen.getByLabelText('Active program');
+  const search = () => screen.getByRole('combobox', {name: 'Search site id or name'});
+  await user.type(search(), 'Harbor');
+  expect(screen.getByRole('option', {name: /Harbor Point/})).toBeVisible();
+  await user.selectOptions(selector(), 'east-bay');
+  expect(window.location.search).toBe('?program=east-bay');
+  await waitFor(() => expect(search()).toHaveValue(''));
+  expect(screen.getByRole('contentinfo')).toHaveTextContent('East Bay Cluster 2');
+  await user.click(screen.getByRole('button', {name: 'Notifications, 3 unread'}));
+  expect(screen.getByRole('region', {name: 'Notifications'})).toHaveTextContent('Delta Landing');
+  expect(screen.getByRole('region', {name: 'Notifications'})).not.toHaveTextContent('Harbor Point');
+  await user.type(search(), 'Harbor{Enter}');
+  expect(screen.getByText('No site matches that name in East Bay Cluster 2.')).toBeVisible();
+  await user.click(within(screen.getByRole('navigation', {name: 'Program', exact: true})).getByRole('link', {name: 'Approvals'}));
+  const waiting = await screen.findByRole('link', {name: 'Open Marsh Junction approval'});
+  expect(waiting).toHaveAttribute('href', '/sites/NRO-E-2102?tab=approval');
+  await user.click(waiting);
+  expect(await screen.findByRole('heading', {name: /Marsh Junction/, level: 1})).toBeVisible();
+  expect(selector()).toHaveValue('east-bay');
+  await user.selectOptions(selector(), 'south-shore');
+  expect(await screen.findByRole('heading', {name: 'South Shore Cluster 7', level: 1})).toBeVisible();
+  expect(window.location.pathname + window.location.search).toBe('/board?program=south-shore');
+  expect(screen.queryByRole('link', {name: 'Review Delta Landing'})).not.toBeInTheDocument();
+});
+
+it.each([
+  ['a conflicting site scope', '/sites/NRO-W-1842?program=east-bay'],
+  ['an unknown program', '/board?program=unknown'],
+  ['an empty explicit program', '/sites/NRO-E-2102?program='],
+  ['duplicate identical programs', '/sites/NRO-E-2102?program=east-bay&program=east-bay'],
+  ['duplicate different programs', '/board?program=east-bay&program=north-valley'],
+  ['a malformed encoded site ID with a valid secondary scope', '/sites/NRO-E-2102%?program=east-bay'],
+])('rejects %s without opening a program board or site', async (_case, path) => {
+  const access = createBrowserStore();
+  expect(access.bootstrap().ok).toBe(true);
+  expect(continueAs(access, PERSON.marcus).ok).toBe(true);
+  const before = Object.entries(localStorage);
+  window.history.replaceState(null, '', path);
+  render(<App />);
+  expect(await screen.findByRole('heading', {name: 'Program not found'})).toBeVisible();
+  expect(screen.getByRole('link', {name: 'Back to Programs'})).toHaveAttribute('href', '/');
+  expect(window.location.pathname + window.location.search).toBe(path);
+  expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+  expect(screen.queryByRole('table', {name: 'Site readiness register'})).not.toBeInTheDocument();
+  expect(Object.entries(localStorage)).toEqual(before);
+});
+
+it.each(['?tab=approval', '?tab=approval&program=east-bay'])(
+  'opens the inferred East Bay site with %s and selects its Approval tab', async search => {
+    const access = createBrowserStore();
+    expect(access.bootstrap().ok).toBe(true);
+    expect(continueAs(access, PERSON.marcus).ok).toBe(true);
+    window.history.replaceState(null, '', `/sites/NRO-E-2102${search}`);
+    render(<App />);
+
+    expect(await screen.findByRole('heading', {name: /Marsh Junction/, level: 1})).toBeVisible();
+    expect(screen.getByRole('tab', {name: 'Approval', selected: true})).toBeVisible();
+    expect(screen.getByLabelText('Active program')).toHaveValue('east-bay');
+    expect(window.location.search).toBe(search);
+  },
+);
+
+it('shows a six-minute source sync age in the header of all four programs', async () => {
+  const user = await openPortfolio();
+  for (const program of ['west-metro', 'east-bay', 'north-valley', 'south-shore']) {
+    await user.selectOptions(screen.getByLabelText('Active program'), program);
+    const selector = screen.getByLabelText('Active program');
+    expect(selector).toHaveValue(program);
+    expect(within(selector.closest('header')).getByText('Sources synced 6 min ago', {exact: true})).toBeVisible();
+  }
+});
+
+it.each([
+  ['east-bay', 12, 'NRO-E-2101', 'Delta Landing', 'Suisun Waterfront', '2026-05-18', 36, 85, 'Power', 'Utility handoff incomplete', PERSON.ruth],
+  ['north-valley', 2, 'NRO-N-3101', 'Orchard Exchange', 'Mill Creek Orchard District', '2026-06-01', 64, 78, 'Permit', 'Pilot permit under review', PERSON.denise],
+  ['south-shore', 4, 'NRO-S-7101', 'Dune Crossing', 'Moss Landing Dunes', '2026-05-26', 31, 82, 'Permit', 'Site access permit suspended', PERSON.denise],
+])('seeds %s with its own site identity, plan, assessment and blocker evidence',
+  (program, count, id, name, neighborhood, plannedDay, probability, confidence, targetRow, blocker, ownerId) => {
+    const {sites, audit} = makeProgramBoard(program);
+    expect(Object.keys(sites)).toHaveLength(count);
+    expect(sites[id]).toMatchObject({id, name, neighborhood, ownerId, blocker, plan: {plannedDay},
+      assessment: {siteId: id, probability, confidence, plannedDay}, proposal: {targetRow},
+      rows: {[targetRow]: {detail: blocker}}});
+    expect(audit.snapshots[sites[id].assessment.snapshotId]).toMatchObject({siteId: id});
+  },
+);
+
+it('matches the adopted West Metro morning board and bootstraps the six adopted accounts and roles', () => {
+  // SHA-256 of the ordered [key, value] pairs from makeBaseline() extracted from
+  // dcf25effc639fa5b218bc66c9cb64b162398fd11, not from the current worktree.
+  const keys = ['scenario', 'sites', 'program', 'audit', 'uploads', 'faults'];
+  const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  const boardDigest = board => digest(keys.map(key => [key, board[key]]));
+  const adoptedBoard = '4f0c71d85517d3fa5f989fb7c4f0aedb94c6f6d29d62f2c361ec22a6a5ec9dbd';
+  // SHA-256 of JSON.stringify(USERS) from frontend/src/data/people.js at the same revision.
+  const adoptedAccounts = 'a49372ddf5e6f232c2759eb9eeec410f3ae86370017b2ce2bc3cdb872d7e91b5';
+  expect(boardDigest(makeProgramBoard(DEFAULT_PROGRAM))).toBe(adoptedBoard);
+  const boot = createBrowserStore().bootstrap();
+  expect(boot.ok).toBe(true);
+  expect(boardDigest(boot.data)).toBe(adoptedBoard);
+  expect(Object.keys(boot.data.users)).toHaveLength(6);
+  expect(digest(boot.data.users)).toBe(adoptedAccounts);
+});
+
+it('keeps West Metro bytes and other programs unchanged when another program writes', () => {
+  const west = createBrowserStore();
+  expect(west.bootstrap().ok).toBe(true);
+  expect(continueAs(west, PERSON.marcus).ok).toBe(true);
+  const westBytes = Object.entries(window.localStorage);
+  const east = createBrowserStore('east-bay');
+  const north = createBrowserStore('north-valley');
+  expect(east.bootstrap().ok).toBe(true);
+  expect(north.bootstrap().ok).toBe(true);
+  const beforeNorth = north.getSnapshot();
+  const localSite = 'NRO-E-2101';
+  const outcome = east.commit({commandId: 'scope-test', siteId: localSite}, board => {
+    const site = board.sites[localSite];
+    return {writes: {sites: {...board.sites, [localSite]: {...site, rev: site.rev + 1}}}};
+  });
+  expect(outcome.ok).toBe(true);
+  expect(createBrowserStore('east-bay').bootstrap().data.sites[localSite].rev).toBe(1);
+  expect(east.commit({commandId: 'cross-scope', siteId: 'NRO-W-1842'}, () => ({writes: {scenario: 'D'}})).error.code).toBe('NOT_FOUND');
+  expect(east.commit({commandId: 'session-write', sessionOnly: true}, () => ({writes: {session: null}})).error.code).toBe('FORBIDDEN');
+  expect(north.recover().data).toEqual(beforeNorth);
+  expect(westBytes.map(([key]) => [key, window.localStorage.getItem(key)])).toEqual(westBytes);
 });

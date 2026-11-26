@@ -1,9 +1,10 @@
 /** Project portfolio triage and the unchanged program history from committed board records. */
 import {DIRECTORY} from '../data/people.js';
 import {BOARD_AT} from '../data/register.js';
-import {deriveReadiness} from './readiness.js';
+import {assessmentIsDown, deriveReadiness} from './readiness.js';
 
 export const FILTERS = Object.freeze(['All', 'Green', 'Amber', 'Red', 'Hold', 'Pending approval', 'Dispatched', 'On air', 'Data exception']);
+export const RISK_LABELS = Object.freeze({Green: 'Good', Amber: 'Needs Attention', Red: 'Critical'});
 export const RISK_RANK = Object.freeze({Red: 0, Amber: 1, Green: 2});
 export const NO_MATCH = 'No site matches that name in West Metro Cluster 4.';
 export const RISK_STYLE = Object.freeze({
@@ -48,6 +49,8 @@ export function searchSites(sites, query = '') {
 /** Identify active categories independently of the wording of the disposition. */
 function matchesChip(site, chip) {
   if (Object.hasOwn(RISK_RANK, chip)) return site.risk === chip;
+  if (chip === 'At risk') return site.risk === 'Amber' || site.risk === 'Red';
+  if (chip === 'On air this month') return isOnAirThisMonth(site);
   if (chip === 'Hold') return site.holdActive;
   if (chip === 'Pending approval') return site.proposal?.state === 'Pending approval';
   if (chip === 'Dispatched') return site.lifecycle === 'dispatched';
@@ -87,27 +90,43 @@ export function exceptionsFor(sites) {
   return groups.map(([id, label, match]) => ({id, label, sites: active.filter(match).sort((a, b) => a.id.localeCompare(b.id))}));
 }
 
-/** Keep full-board totals separate from the filtered register and map. */
-export function selectPortfolio(board, {query = '', chip = 'All', sort, exception} = {}) {
+/** Match closed sites counted in the fixed workshop month. */
+function isOnAirThisMonth(site) {
+  return site.lifecycle === 'on_air' && site.plan.closedAt?.startsWith(BOARD_AT.slice(0, 7));
+}
+
+/** Build a scoped operational URL without losing the inherited program parameter. */
+export function withOperationalParams(path, filters) {
+  const [pathname, search] = path.split('?');
+  const params = new URLSearchParams(search);
+  for (const [key, value] of Object.entries(filters)) if (value) params.set(key, value);
+  return params.size ? `${pathname}?${params}` : pathname;
+}
+
+/** Keep full-board totals and recorded history separate from the filtered register. */
+export function selectPortfolio(board, {query = '', chip = 'All', sort, exception, owner} = {}) {
+  const interrupted = assessmentIsDown(board.faults);
   const sites = Object.fromEntries(Object.entries(board.sites).map(([id, site]) => {
-    const {risk, disposition, current, quality} = deriveReadiness(site, BOARD_AT, board.faults, board.audit.snapshots[site.assessment?.snapshotId]);
-    const assessment = site.lifecycle === 'open' && !current ? null : site.assessment;
+    const {risk, disposition, current, quality} = deriveReadiness(site, BOARD_AT, board.faults,
+      board.audit.snapshots[site.assessment?.snapshotId], board.program.thresholds);
+    const retainedOutage = site.lifecycle === 'open' && interrupted && Boolean(site.assessment);
+    const assessment = site.lifecycle === 'open' && !current && !retainedOutage ? null : site.assessment;
     const changedQuality = Object.keys(quality).filter(row => site.rows[row].quality !== quality[row]);
     const rows = changedQuality.length ? {...site.rows} : site.rows;
     for (const key of changedQuality) rows[key] = {...rows[key], quality: quality[key]};
-    return [id, risk === site.risk && disposition === site.disposition && assessment === site.assessment && rows === site.rows
-      ? site : {...site, risk, disposition, assessment, rows}];
+    return [id, !retainedOutage && risk === site.risk && disposition === site.disposition && assessment === site.assessment && rows === site.rows
+      ? site : {...site, risk, disposition, assessment, rows, retainedOutage}];
   }));
   const full = Object.values(sites);
   const risk = {Green: 0, Amber: 0, Red: 0};
   full.forEach(site => { risk[site.risk] += 1; });
   const exceptions = exceptionsFor(sites);
   const group = exceptions.find(entry => entry.id === exception);
-  const matching = searchSites(sites, query).filter(site => matchesChip(site, chip) && (!group || group.sites.includes(site)));
+  const matching = searchSites(sites, query).filter(site => matchesChip(site, chip) && (!group || group.sites.includes(site)) && (!owner || site.ownerId === owner));
   const visible = !sort && query.trim() ? matching : matching.sort((a, b) => compareSites(a, b, sort));
   return {visible, exceptions, total: full.length, risk, atRisk: risk.Amber + risk.Red,
     hold: full.filter(site => site.holdActive).length, dispatched: full.filter(site => site.lifecycle === 'dispatched').length,
-    onAir: full.filter(site => site.lifecycle === 'on_air' && site.plan.closedAt?.startsWith(BOARD_AT.slice(0, 7))),
+    onAir: full.filter(isOnAirThisMonth), trend: board.program.trend,
     visitsAtStake: board.program.visitsAtStake.map(id => board.sites[id]), failed: board.program.failures.length,
     failedOpen: board.program.failures.filter(entry => entry.state === 'Open').length};
 }

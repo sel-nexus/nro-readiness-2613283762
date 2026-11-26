@@ -3,12 +3,21 @@
 @tailwind utilities;
 
 @layer base {
-  body { @apply bg-surface text-body text-sm antialiased tabular-nums; }
+  :root {
+    --primary: #0082F0;
+    --strong: #003460;
+    --canvas: #FFFFFF;
+    --ink: #0C0C0C;
+    --group: #F5F7FA;
+    --muted: #6B7280;
+    --good: #186643;
+  }
+  body { @apply antialiased tabular-nums; background: var(--canvas); color: var(--ink); font: 1rem/1.5 "Helvetica Neue", Arial, sans-serif; }
   h1, h2, h3 { @apply text-ink font-semibold; }
-  h1 { @apply text-title; }
-  a { @apply text-teal-ink underline-offset-4; }
-  a:hover { @apply underline; }
-  :focus-visible { @apply outline outline-2 outline-offset-2 outline-focus; }
+  h1, h1.text-title { font-size: clamp(1.75rem, 4vw, 2.5rem); line-height: 1.2; }
+  a { color: var(--strong); }
+  a:hover { text-decoration: none; }
+  :focus-visible { outline: 2px solid var(--strong); outline-offset: 2px; }
   button:disabled, [aria-disabled='true'] { opacity: .5; }
   caption { @apply px-4 py-3 text-left font-semibold text-ink; }
   th, td { @apply border-b border-line px-3 py-2.5 text-left align-top; }
@@ -24,26 +33,43 @@
     @apply inline-flex min-h-9 items-center justify-center gap-2 rounded-control border border-muted bg-card px-3 py-1.5 font-medium text-ink;
   }
   .btn:hover { @apply bg-surface no-underline; }
-  .btn-primary { @apply border-teal bg-teal text-white; }
-  .btn-primary:hover { @apply border-teal-ink bg-teal-ink; }
+  .btn-primary, .btn-primary:hover { background: var(--primary); border-color: var(--primary); color: var(--canvas); font-size: 1.1875rem; font-weight: 700; }
   .field { @apply min-w-0 max-w-full rounded-control border border-line bg-card px-3 py-2 text-body; }
   .field[aria-invalid='true'] { @apply border-red; }
   .badge { @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-meta font-semibold; }
   .risk-red { @apply bg-red-wash text-red; }
   .risk-amber { @apply bg-amber-wash text-amber; }
-  .risk-green { @apply bg-green-wash text-teal-ink; }
+  .risk-green { @apply bg-green-wash; color: var(--good); }
   .meta { @apply text-meta text-muted; }
   .scroll-table { @apply max-w-full overflow-x-auto; }
   .scroll-table table { @apply w-full border-collapse; }
   .scroll-table tbody tr:hover { background: rgb(82 96 109 / .055); }
-  .login-grid { @apply min-h-dvh; }
   .shell-header { @apply min-h-14 border-b border-line bg-card; }
   .shell-layout { @apply min-w-0; }
 }
 
-@media (min-width: 1366px) {
-  .login-grid { display: grid; grid-template-columns: 46% minmax(0, 1fr); }
-}
+/* Bridge inherited utility names to the approved workspace palette. */
+h1, h2, h3, .text-ink, .text-body { color: var(--ink); }
+.text-muted, .meta { color: var(--muted); }
+.bg-card { background: var(--canvas); }
+.bg-surface, .program-group { background: var(--group); }
+.bg-ink, .program-footer { background: var(--strong); }
+.text-teal-ink { color: var(--strong); }
+.stroke-teal { stroke: var(--primary); }
+.bg-teal { background: var(--primary); }
+.program-good-fill { background: var(--good); }
+.btn, .field, .program-nav-link { border-radius: 2px; }
+.field { border-color: var(--muted); }
+.program-section-title { font-size: 1.5rem; line-height: 1.3; }
+.program-nav-link { display: block; padding: .5rem .75rem; color: var(--ink); text-decoration: none; }
+.program-nav-link:hover { background: var(--group); text-decoration: none; }
+.program-nav-link[aria-current] { background: var(--primary); color: var(--canvas); font-size: 1.1875rem; font-weight: 700; }
+.program-footer { color: var(--canvas); }
+.program-footer :focus-visible { outline-color: var(--canvas); }
+
+.site-decision { max-width: 38ch; }
+.site-tab[aria-selected='true'] { border-bottom-color: var(--primary); color: var(--strong); background: var(--group); }
+.prediction-score { color: var(--primary); font-size: clamp(2.75rem, 6vw, 4rem); font-weight: 600; line-height: 1; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }

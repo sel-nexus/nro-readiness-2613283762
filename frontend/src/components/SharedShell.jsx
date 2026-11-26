@@ -1,11 +1,15 @@
 /** Present common signed-in navigation, account actions and read-only board signals. */
 import {useEffect, useRef, useState} from 'react';
 import PropTypes from 'prop-types';
-import {Link, NavLink, useLocation, useNavigate} from 'react-router-dom';
+import {Link, useLocation, useNavigate} from 'react-router-dom';
 import {Icon} from './icons.jsx';
 import {accounts, authorize, initials, INTENT} from '../utils/access.js';
-import {formatDate, NO_MATCH, orderedNotices, searchSites, sitePath} from '../utils/portfolio.js';
+import {formatDate, orderedNotices, searchSites, sitePath} from '../utils/portfolio.js';
 
+import {PROGRAMS, programPath} from '../data/programs.js';
+
+const navigation = [['/', 'Programs'], ['/board', 'Board'], ['/schedule', 'Schedule'], ['/activity', 'Activity'],
+  ['/approvals', 'Approvals'], ['/service-health', 'Service health']];
 const searchLabel = 'Search site id or name';
 const dot = {Up: 'bg-teal', Delayed: 'bg-amber', Down: 'bg-red'};
 
@@ -16,18 +20,19 @@ const dot = {Up: 'bg-teal', Delayed: 'bg-amber', Down: 'bg-red'};
  *   onRestore: Optional callback receiving the opener for the shared restore dialog.
  *   onSwitch, onSignOut: Commit session changes and navigate only on success.
  */
-export function SharedShell({board, actor, query, onQuery, onSwitch, onSignOut, onRestore, sourceStatus, children}) {
+export function SharedShell({board, actor, programId, query, onQuery, onSwitch, onSignOut, onRestore, sourceStatus, children}) {
   const {pathname} = useLocation();
   const navigate = useNavigate();
   const isSite = pathname.toLowerCase().startsWith('/sites/');
-  const isPortfolio = pathname === '/';
+  const route = pathname.replace(/\/+$/, '').toLowerCase() || '/';
+  const isPrograms = route === '/' || route === '/portfolio';
+  const isBoard = route === '/board';
   const admin = authorize(actor, INTENT.health);
   const [panel, setPanel] = useState(null);
   const [lookup, setLookup] = useState('');
   const [suggesting, setSuggesting] = useState(false);
   const [selected, setSelected] = useState(-1);
   const guide = useRef(null);
-  const guideButton = useRef(null);
   const guideOpen = useRef(false);
   const searchBox = useRef(null);
   const popovers = useRef(null);
@@ -36,15 +41,17 @@ export function SharedShell({board, actor, query, onQuery, onSwitch, onSignOut, 
   const allNotices = orderedNotices(board.program.notices);
   const unread = allNotices.filter(notice => notice.unread).length;
   const {items, age} = sourceStatus;
-  const matches = !isPortfolio && lookup.trim() ? searchSites(board.sites, lookup) : [];
-  const listOpen = !isPortfolio && suggesting && !!lookup.trim();
+  const searchValue = isBoard ? query : lookup;
+  const matches = searchValue.trim() ? searchSites(board.sites, searchValue) : [];
+  const listOpen = suggesting && !!searchValue.trim();
 
   useEffect(() => {
     setPanel(null);
     setLookup('');
     setSuggesting(false);
     setSelected(-1);
-  }, [pathname]);
+    onQuery('');
+  }, [pathname, onQuery]);
 
   useEffect(() => {
     /** Close disclosures when interacting outside them. */
@@ -65,7 +72,6 @@ export function SharedShell({board, actor, query, onQuery, onSwitch, onSignOut, 
 
   /** Keep keyboard selection on the input and expose the active result. */
   function searchKeys(event) {
-    if (isPortfolio) return;
     if (event.key === 'Escape') {
       if (listOpen) event.stopPropagation();
       setSuggesting(false);
@@ -75,7 +81,7 @@ export function SharedShell({board, actor, query, onQuery, onSwitch, onSignOut, 
       setSuggesting(true);
       setSelected(index => index < 0 ? (event.key === 'ArrowDown' ? 0 : matches.length - 1)
         : (index + (event.key === 'ArrowDown' ? 1 : matches.length - 1)) % matches.length);
-    } else if (event.key === 'Enter' && lookup.trim()) {
+    } else if (event.key === 'Enter' && searchValue.trim()) {
       event.preventDefault();
       const result = matches[selected] ?? (matches.length === 1 ? matches[0] : null);
       if (result) openResult(result);
@@ -91,6 +97,7 @@ export function SharedShell({board, actor, query, onQuery, onSwitch, onSignOut, 
 
   /** Open the focus-trapping guide; shared dialog styles lock background scrolling. */
   function openGuide() {
+    setPanel(null);
     guide.current.showModal();
     guideOpen.current = true;
   }
@@ -99,13 +106,19 @@ export function SharedShell({board, actor, query, onQuery, onSwitch, onSignOut, 
     <>
       <a className="sr-only focus:not-sr-only" href="#main-content">Skip to content</a>
       <header className="shell-header relative z-20 flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2 xl:px-6">
-        <Link to="/" className="flex shrink-0 items-center gap-2 font-semibold text-ink">
+        <Link to={programPath('/', programId)} className="flex shrink-0 items-center gap-2 font-semibold text-ink">
           <span className="grid size-8 place-items-center rounded-control bg-ink text-white">
             <Icon name="logo" />
           </span>
           NRO Readiness
         </Link>
-        <p className="meta order-last basis-full xl:order-none xl:basis-auto">{board.program.cluster} · {board.program.quarter}</p>
+        <div className="min-w-0 max-w-full">
+          <label className="sr-only" htmlFor="active-program">Active program</label>
+          <select id="active-program" className="field w-full" value={programId}
+            onChange={event => navigate(programPath(isSite ? '/board' : route, event.target.value))}>
+            {Object.entries(PROGRAMS).map(([id, program]) => <option key={id} value={id}>{program.name}</option>)}
+          </select>
+        </div>
         <div
           ref={searchBox}
           className="relative order-last min-w-0 basis-full xl:order-none xl:flex-1 xl:basis-auto"
@@ -118,22 +131,19 @@ export function SharedShell({board, actor, query, onQuery, onSwitch, onSignOut, 
           <input
             id="site-search"
             className="field w-full !pl-9"
-            type={isPortfolio ? 'search' : 'text'}
-            role={isPortfolio ? undefined : 'combobox'}
-            aria-autocomplete={isPortfolio ? undefined : 'list'}
-            aria-expanded={isPortfolio ? undefined : listOpen}
+            type="text"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded={listOpen}
             aria-controls={listOpen ? 'site-suggestions' : undefined}
             aria-activedescendant={listOpen && matches[selected] ? `search-result-${selected}` : undefined}
             placeholder={searchLabel}
-            value={isPortfolio ? query : lookup}
+            value={searchValue}
             onFocus={() => setSuggesting(true)}
             onChange={event => {
-              if (isPortfolio) onQuery(event.target.value);
-              else {
-                setLookup(event.target.value);
-                setSuggesting(true);
-                setSelected(-1);
-              }
+              (isBoard ? onQuery : setLookup)(event.target.value);
+              setSuggesting(true);
+              setSelected(-1);
             }}
             onKeyDown={searchKeys}
           />
@@ -150,7 +160,7 @@ export function SharedShell({board, actor, query, onQuery, onSwitch, onSignOut, 
                   >
                     <Link
                       tabIndex={-1}
-                      className="block px-3 py-2 hover:bg-surface"
+                      className="block border-b border-line px-3 py-2 hover:bg-surface"
                       to={sitePath(site.id)}
                       onClick={() => setSuggesting(false)}
                     >
@@ -159,7 +169,7 @@ export function SharedShell({board, actor, query, onQuery, onSwitch, onSignOut, 
                   </li>
                 ))}
               </ul>
-              {!matches.length && <p className="px-3 py-2 text-muted">{NO_MATCH}</p>}
+              {!matches.length && <p role="status" className="px-3 py-2 text-muted">No site matches that name in {board.program.cluster}.</p>}
             </div>
           )}
         </div>
@@ -183,7 +193,7 @@ export function SharedShell({board, actor, query, onQuery, onSwitch, onSignOut, 
               </span>
             </div>
           ))}
-          {age !== null && <p className="meta hidden min-[1470px]:block">Sources synced {age} min ago</p>}
+          {age !== null && <p className="meta">Sources synced {age} min ago</p>}
         </div>
         <div ref={popovers} className="relative ml-auto flex items-center gap-2" onKeyDown={event => { if (event.key === 'Escape' && panel) closePanel(); }}>
           <div>
@@ -206,13 +216,16 @@ export function SharedShell({board, actor, query, onQuery, onSwitch, onSignOut, 
                 aria-labelledby="notices-title"
               >
                 <h2 id="notices-title" className="border-b border-line px-4 py-3 font-semibold">Notifications</h2>
+                {!allNotices.length && <p className="p-4 text-muted">No notifications for this program.</p>}
                 <ul className="max-h-[55vh] divide-y divide-line overflow-y-auto">
                   {allNotices.map(notice => (
                     <li key={notice.id}>
-                      <Link to={sitePath(notice.siteId)} className="block px-4 py-2 hover:bg-surface" onClick={closePanel}>
-                        {notice.unread && <span className="mr-2 font-semibold text-teal-ink">Unread</span>}
-                        {notice.text}
-                      </Link>
+                      {notice.siteId ? (
+                        <Link to={sitePath(notice.siteId)} className="btn m-2 justify-start text-left" onClick={closePanel}>
+                          {notice.unread && <strong>Unread</strong>}
+                          {notice.text}
+                        </Link>
+                      ) : <p className="p-3">{notice.text}</p>}
                     </li>
                   ))}
                 </ul>
@@ -223,7 +236,7 @@ export function SharedShell({board, actor, query, onQuery, onSwitch, onSignOut, 
             <button
               type="button"
               ref={accountButton}
-              className="flex items-center gap-2 rounded-control px-1 text-left"
+              className="btn text-left"
               aria-expanded={['account', 'access', 'switch'].includes(panel)}
               aria-controls={['account', 'access', 'switch'].includes(panel) ? 'account-panel' : undefined}
               onClick={() => setPanel(panel && panel !== 'notices' ? null : 'account')}
@@ -259,7 +272,7 @@ export function SharedShell({board, actor, query, onQuery, onSwitch, onSignOut, 
                       Role: actor.role,
                       Email: actor.email,
                       'Employee ID': actor.employeeId,
-                      Phone: actor.phone
+                      Phone: actor.phone?.replace(/[^0-9]/g, '').slice(-4)
                     }).map(([label, value]) => (
                       <div key={label} className="contents">
                         <dt className="font-semibold">{label}</dt>
@@ -268,6 +281,7 @@ export function SharedShell({board, actor, query, onQuery, onSwitch, onSignOut, 
                     ))}
                   </dl>
                 )}
+                <button type="button" className="btn justify-start" onClick={openGuide}>Scores and approvals</button>
                 <button
                   type="button"
                   className="btn justify-start"
@@ -309,55 +323,25 @@ export function SharedShell({board, actor, query, onQuery, onSwitch, onSignOut, 
           </div>
         </div>
       </header>
-      <div className={isSite ? '' : 'shell-layout xl:grid xl:min-h-[calc(100vh-3.5rem)] xl:grid-cols-[232px_minmax(0,1fr)]'}>
-        {!isSite && (
-          <aside className="border-b border-line bg-card px-3 py-3 xl:border-b-0 xl:border-r">
-            <nav aria-label="Program" className="flex flex-wrap gap-1 xl:flex-col">
-              <NavLink
-                to="/"
-                end
-                className={({isActive}) => `flex items-center gap-2 rounded-control px-3 py-2 ${
-                  isActive ? 'bg-green-wash font-semibold text-teal-ink' : 'text-ink hover:bg-surface'}`}
-              >
-                <Icon name="grid" />
-                Portfolio
-              </NavLink>
-              {admin && (
-                <NavLink
-                  to="/service-health"
-                  className={({isActive}) => `flex items-center gap-2 rounded-control px-3 py-2 ${
-                    isActive ? 'bg-green-wash font-semibold text-teal-ink' : 'text-ink hover:bg-surface'}`}
-                >
-                  <Icon name="pulse" />
-                  Service health
-                </NavLink>
-              )}
-            </nav>
-          </aside>
-        )}
+      <div className="shell-layout min-h-[65vh] lg:grid lg:grid-cols-[13rem_minmax(0,1fr)]">
+        <aside className="border-b border-line bg-card px-3 py-3 lg:border-b-0 lg:border-r">
+          <nav aria-label="Program" className="flex flex-wrap gap-1 lg:flex-col">
+            {navigation.filter(([path]) => admin || path !== '/service-health').map(([path, label]) => (
+              <Link key={path} to={programPath(path, programId)} className="program-nav-link"
+                aria-current={(path === '/' ? isPrograms : path === route) ? 'page' : path === '/board' && isSite ? 'location' : undefined}>
+                {label}
+              </Link>
+            ))}
+          </nav>
+        </aside>
         <main id="main-content" tabIndex={-1} className="min-w-0 px-4 py-4 md:p-6">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            {isSite ? (
-              <nav aria-label="Breadcrumb">
-                <Link className="font-medium text-teal-ink underline-offset-4 hover:underline" to="/">Portfolio</Link>
-              </nav>
-            ) : <span className="meta">{board.program.name}</span>}
-            <div className="flex flex-wrap items-center gap-3">
-              {age !== null && <p className="meta min-[1470px]:hidden">Sources synced {age} min ago</p>}
-              <button
-                ref={guideButton}
-                className="inline-flex min-h-8 items-center gap-2 font-medium text-teal-ink hover:underline"
-                type="button"
-                onClick={openGuide}
-              >
-                <Icon name="guide" />
-                How to read this
-              </button>
-            </div>
-          </div>
           {children}
         </main>
       </div>
+      <footer className="program-footer flex flex-wrap justify-between gap-2 px-4 py-4 md:px-6">
+        <strong>NRO Readiness</strong>
+        <span>{board.program.cluster}</span>
+      </footer>
       <dialog
         ref={guide}
         aria-labelledby="guide-title"
@@ -370,12 +354,12 @@ export function SharedShell({board, actor, query, onQuery, onSwitch, onSignOut, 
           }
         }}
         onClose={() => {
-          if (guideOpen.current) guideButton.current?.focus();
+          if (guideOpen.current) accountButton.current?.focus();
           guideOpen.current = false;
         }}
       >
         <div className="flex items-center justify-between gap-3">
-          <h2 id="guide-title" className="text-title font-semibold text-ink">How to read this</h2>
+          <h2 id="guide-title" className="program-section-title">Scores and approvals</h2>
           <button className="btn" aria-label="Close guide" autoFocus type="button" onClick={() => guide.current.close()}>
             <Icon name="close" />
           </button>
@@ -391,20 +375,18 @@ export function SharedShell({board, actor, query, onQuery, onSwitch, onSignOut, 
           <div>
             <dt className="font-semibold">Risk thresholds</dt>
             <dd>
-              Red takes precedence below 50% readiness or confidence, or for a verified mandatory Not Ready item.
-              Amber covers 50–79% readiness, 50–74% confidence, or unresolved mandatory evidence.
-              Green requires at least 80% readiness and 75% confidence with no mandatory blocker or unresolved quality issue.
+              Good, Needs Attention, and Critical follow the current thresholds. A failed mandatory prerequisite can make a site Critical regardless of its score.
             </dd>
           </div>
           <div>
             <dt className="font-semibold">Contributions are not causes</dt>
-            <dd>Contributions explain how inputs moved the score. Missing or conflicting evidence is not replaced with a guess.</dd>
+            <dd>A contribution is an input used by the score, not a cause. Missing or conflicting evidence is not replaced with a guess.</dd>
           </div>
           <div>
             <dt className="font-semibold">Approval is separate from field execution</dt>
             <dd>
-              Only the program manager approves consequential changes. Dispatch still requires current qualifying evidence,
-              dispatch-specific approval and no active hold. Confidence below 60% requires approver review before dispatch or schedule changes.
+              A supplier change, a baseline date change, and a low-confidence dispatch wait for the program manager.
+              Approval does not override failed prerequisites or an active hold.
             </dd>
           </div>
         </dl>
@@ -413,6 +395,6 @@ export function SharedShell({board, actor, query, onQuery, onSwitch, onSignOut, 
   );
 }
 
-SharedShell.propTypes = {board: PropTypes.object.isRequired, actor: PropTypes.object.isRequired, query: PropTypes.string.isRequired,
+SharedShell.propTypes = {board: PropTypes.object.isRequired, actor: PropTypes.object.isRequired, programId: PropTypes.string.isRequired, query: PropTypes.string.isRequired,
   onQuery: PropTypes.func.isRequired, onSwitch: PropTypes.func.isRequired, onSignOut: PropTypes.func.isRequired,
   onRestore: PropTypes.func, sourceStatus: PropTypes.object.isRequired, children: PropTypes.node.isRequired};

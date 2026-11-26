@@ -2,7 +2,7 @@
 import {DIRECTORY, PERSON, USERS} from '../data/people.js';
 import {BOARD_AT, ROW_ORDER, SUPPLIERS} from '../data/register.js';
 import {authorize, INTENT, readAccess} from '../utils/access.js';
-import {civilMillis, deriveReadiness, MANDATORY, REVIEW_BELOW} from '../utils/readiness.js';
+import {civilMillis, deriveReadiness, MANDATORY} from '../utils/readiness.js';
 import {appendEvent, commandError, siteFence} from './evidence.js';
 
 const DECISIONS = ['approve', 'reject', 'modify', 'override'];
@@ -10,7 +10,8 @@ const FIELD = {dispatch: INTENT.dispatch, hold: INTENT.fieldHold, resequence: IN
 const STALE = 'Board or access changed. Review and confirm again.';
 
 /** Derive live evidence gates independently of the historical intervention. */
-const readinessFor = (board, site) => deriveReadiness(site, BOARD_AT, board.faults, board.audit.snapshots[site.assessment?.snapshotId]);
+const readinessFor = (board, site) => deriveReadiness(site, BOARD_AT, board.faults,
+  board.audit.snapshots[site.assessment?.snapshotId], board.program.thresholds);
 
 /** Rank live prerequisites by blocker status, urgency, and stable row order. */
 export function rank(site, readiness) {
@@ -219,6 +220,12 @@ export function previewApproval(site, optionId = null) {
     scope, before, after, eligible: Boolean(eligible), reviewKey: JSON.stringify([proposal?.id, optionId, site.planRev, before, after, scope])};
 }
 
+/** List current reviewable requests waiting for the manager in this committed program. */
+export function pendingApprovals(board) {
+  return Object.values(board.sites).filter(site =>
+    site.proposal?.state === 'Pending approval' && previewApproval(site).eligible);
+}
+
 /** Record an intentional forbidden decision; never accept or retain rationale here. */
 export function recordApprovalDenial(store, {attempt, commandId, siteId, expectedSiteRev, expectedGeneration,
   expectedSessionEpoch, expectedSessionToken, proposalId, optionId} = {}) {
@@ -332,7 +339,7 @@ export function previewField(board, site, actor) {
   const resequence = applicableApproval(site, assignment, 'resequence');
   const readiness = readinessFor(board, site);
   const confidence = readiness.confidence;
-  const needsReview = confidence == null || confidence < REVIEW_BELOW;
+  const needsReview = confidence == null || readiness.reviewRequired;
   const reviewed = decision => confidence != null && decision?.confidenceReviewed === true && decision.reviewedEvidenceRev === site.evidenceRev
     && decision.assessmentRef === site.assessment?.snapshotId;
   const reviewReason = `Confidence is ${confidence == null ? 'unknown' : `${confidence}%`}. An approver has to review this site before dispatch.`;
@@ -350,6 +357,7 @@ export function previewField(board, site, actor) {
     && ['approve', 'override'].includes(item.verb) && item.actorId === PERSON.priya) ?? null;
   return {assignment, option, holdReason, held: site.holdActive || heldCrew, approvals: {dispatch, hold: holdApproval, resequence}, reasons: {
     dispatch: base ?? holdReason ?? (heldCrew ? 'The assigned crew is on hold.' : null)
+      ?? (readiness.dispatchBlocked ? `Confidence is ${confidence == null ? 'unknown' : `${confidence}%`}. Dispatch requires at least ${readiness.dispatchMinimum}% confidence.` : null)
       ?? (needsReview && !reviewed(dispatch) ? reviewReason : null) ?? (inactive ? 'No active crew assignment.' : null)
       ?? (!readiness.mandatoryReady ? 'Dispatch requires all mandatory evidence to be Current and Ready.' : null)
       ?? (!readiness.current ? 'Dispatch requires a current assessment.' : null)

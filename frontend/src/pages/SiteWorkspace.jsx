@@ -9,11 +9,26 @@ import {FieldStrip} from '../components/FieldStrip.jsx';
 import {PredictionPanel} from '../components/PredictionPanel.jsx';
 import {Recommendation} from '../components/Recommendation.jsx';
 import {Icon} from '../components/icons.jsx';
+import {programPath, siteProgram} from '../data/programs.js';
 import {BOARD_AT, SUPPLIERS} from '../data/register.js';
-import {formatDate, personName, RISK_STYLE, sitePath} from '../utils/portfolio.js';
+import {formatDate, personName, RISK_LABELS, RISK_STYLE, sitePath} from '../utils/portfolio.js';
 import {confidenceBand, deriveReadiness} from '../utils/readiness.js';
 
 const TABS = [['evidence', 'Evidence'], ['prediction', 'Prediction'], ['action', 'Blockers and action'], ['approval', 'Approval'], ['audit', 'Audit']];
+
+/** State the current site decision without turning a forecast into dispatch authority. */
+function decisionTitle(site, readiness, crew) {
+  const label = RISK_LABELS[readiness.risk];
+  if (site.lifecycle === 'on_air') return `${site.name} is on air.`;
+  if (site.lifecycle === 'dispatched') return `${site.name} is ${label}. The crew has been dispatched.`;
+  if (site.id === 'NRO-W-1842' && site.holdActive && crew?.shiftDay === '2026-05-18' &&
+    readiness.quality.Power === 'Current' && site.rows.Power.status === 'Not Ready') {
+    return 'Harbor Point is Critical. Hold the 18 May crew. Power is not ready.';
+  }
+  if (site.holdActive) return `${site.name} is ${label}. Keep the crew on hold.`;
+  if (readiness.ready) return `${site.name} is ${label}. Check the crew plan before dispatch.`;
+  return `${site.name} is ${label}. Review the evidence before committing a crew.`;
+}
 
 /** Render the exact site supplied by the route guard, sharing one committed context. */
 export default function SiteWorkspace({board, site, actor, store, notify}) {
@@ -26,15 +41,17 @@ export default function SiteWorkspace({board, site, actor, store, notify}) {
   const target = location.hash.slice(1);
   const optionId = typeof location.state?.optionId === 'string' ? location.state.optionId : null;
   const snapshot = board.audit.snapshots[site.assessment?.snapshotId];
-  const readiness = deriveReadiness(site, BOARD_AT, board.faults, snapshot);
+  const readiness = deriveReadiness(site, BOARD_AT, board.faults, snapshot, board.program.thresholds);
   const {lastScore, current, confidence, risk, disposition} = readiness;
   const onAir = site.lifecycle === 'on_air';
   const scoreLabel = !current && !onAir ? 'Last probability (historical)' : 'Probability';
   const probability = onAir ? '—' : lastScore?.probability == null ? 'Unavailable' : `${lastScore.probability}%`;
+  const scoreConfidence = lastScore ? `${lastScore.confidence}% (${confidenceBand(lastScore.confidence)})` : '—';
   const supplier = SUPPLIERS[site.plan.supplierId];
   const notes = [...site.notes].reverse().sort((a, b) => b.at.localeCompare(a.at));
   const auditCount = board.audit.events.filter(event => event.siteId === site.id).length;
-  const crewRev = board.program.crew.find(item => item.siteId === site.id)?.rev ?? null;
+  const crew = board.program.crew.find(item => item.siteId === site.id);
+  const crewRev = crew?.rev ?? null;
   const props = {board, site, actor, store, notify, readiness, target};
 
   useEffect(() => {
@@ -61,17 +78,17 @@ export default function SiteWorkspace({board, site, actor, store, notify}) {
 
   return (
     <div className="space-y-3" ref={frame}>
-      <Link to="/" className="inline-block font-medium underline">Back to Portfolio</Link>
+      <Link to={programPath('/board', siteProgram(site.id))} className="btn">Board</Link>
       <header className="card space-y-4 p-5">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
             <p className="meta font-medium">{site.id}</p>
-            <h1>{site.name}</h1>
+            <h1 className="site-decision">{decisionTitle(site, readiness, crew)}</h1>
             <p className="text-muted">{site.neighborhood}</p>
           </div>
           <span className={`badge ${RISK_STYLE[risk].badge}`}>
             <Icon name={risk} />
-            {risk}
+            {RISK_LABELS[risk]}
           </span>
         </div>
         <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" id="site-plan" tabIndex={-1}>
@@ -84,16 +101,25 @@ export default function SiteWorkspace({board, site, actor, store, notify}) {
             <dd className="font-medium">{supplier.name} · {site.plan.agreementId}</dd>
           </div>
           <div>
-            <dt className="meta">{scoreLabel} · Confidence</dt>
-            <dd className="font-medium">{probability} · {lastScore ? `${lastScore.confidence}% (${confidenceBand(lastScore.confidence)})` : '—'}</dd>
-            {lastScore && confidence !== lastScore.confidence && <dd className="meta">Working confidence: {confidence}%</dd>}
+            <dt className="meta">Assessment · {scoreLabel} · Confidence</dt>
+            <dd className="font-medium">{probability} · {scoreConfidence}</dd>
+            {lastScore && confidence !== lastScore.confidence && (
+              <dd className="meta">Working confidence: {confidence}%</dd>
+            )}
           </div>
           <div>
             <dt className="meta">Disposition · Next owner</dt>
             <dd className="font-medium">{disposition} · {personName(board, site.ownerId)}</dd>
           </div>
         </dl>
-        {lastScore && <p className="meta">Scored {formatDate(lastScore.scoredAt, true)} · {lastScore.model} · {lastScore.correlationId}</p>}
+        {lastScore && (
+          <p className="meta">
+            Scored{' '}
+            <time dateTime={lastScore.scoredAt}>
+              {formatDate(lastScore.scoredAt)}, {lastScore.scoredAt.slice(11, 16)}
+            </time>.
+          </p>
+        )}
       </header>
       {!!notes.length && (
         <section className="card p-4" aria-label="Site notes">
@@ -110,10 +136,12 @@ export default function SiteWorkspace({board, site, actor, store, notify}) {
       )}
       <div role="tablist" aria-label="Site workspace" className="flex flex-wrap border-b border-line bg-card">
         {TABS.map(([key, label]) => (
-          <button key={key} type="button" role="tab" id={`tab-${key}`} aria-controls="workspace-pane" aria-selected={key === tab}
-            tabIndex={key === tab ? 0 : -1} onKeyDown={moveTab} onClick={() => navigate(`${sitePath(site.id)}?tab=${key}`)}
-            className={`shrink-0 whitespace-nowrap border-b-2 px-3 py-3 font-medium ${
-              tab === key ? 'border-teal text-teal-ink' : 'border-transparent text-muted hover:bg-surface'}`}>
+          <button
+            key={key} type="button" role="tab" id={`tab-${key}`}
+            aria-controls="workspace-pane" aria-selected={key === tab} tabIndex={key === tab ? 0 : -1}
+            onKeyDown={moveTab} onClick={() => navigate(`${sitePath(site.id)}?tab=${key}`)}
+            className="site-tab border-b-2 border-transparent px-3 py-3 font-medium text-muted hover:bg-surface"
+          >
             {label}{key === 'audit' ? ` (${auditCount})` : ''}
           </button>
         ))}
@@ -128,7 +156,11 @@ export default function SiteWorkspace({board, site, actor, store, notify}) {
           </div>
         )}
         {tab === 'approval' && (
-          <ApprovalPanel key={JSON.stringify([site.rev, board.faults.rev, crewRev, optionId])} {...props} optionId={optionId} />
+          <ApprovalPanel
+            key={JSON.stringify([site.rev, board.faults.rev, crewRev, optionId])}
+            {...props}
+            optionId={optionId}
+          />
         )}
         {tab === 'audit' && <AuditPanel {...props} />}
       </section>
