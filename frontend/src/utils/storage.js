@@ -1,6 +1,8 @@
 /** Persist and recover one workshop tab's board without exposing incomplete transactions. */
-import {BOARD_KEYS, counter, makeBaseline, validateAccess, validateBoard} from '../data/baseline.js';
-import {freezeTree, PERSON} from '../data/people.js';
+import {BOARD_KEYS, counter, validateAccess, validateBoard} from '../data/baseline.js';
+import {DIRECTORY, freezeTree, PERSON} from '../data/people.js';
+import {DEFAULT_PROGRAM, makeProgramBoard} from '../data/programs.js';
+import {ROW_ORDER, SUPPLIERS} from '../data/register.js';
 
 export const STORAGE_PREFIX = 'nro.demo.';
 export const SCHEMA_VERSION = 1;
@@ -31,11 +33,11 @@ function decode(raw) {
 }
 
 /** Validate a pending marker before acting on its key names or values. */
-function parseJournal(raw) {
+function parseJournal(raw, allowed = KEYS) {
   const journal = JSON.parse(raw);
   if (journal?.schemaVersion !== SCHEMA_VERSION || !validId(journal.commandId)
     || !Array.isArray(journal.keys) || !journal.keys.length || new Set(journal.keys).size !== journal.keys.length
-    || !journal.keys.every(key => KEYS.includes(key)) || !journal.prior || Array.isArray(journal.prior)
+    || !journal.keys.every(key => allowed.includes(key)) || !journal.prior || Array.isArray(journal.prior)
     || Object.keys(journal.prior).length !== journal.keys.length
     || !journal.keys.every(key => Object.hasOwn(journal.prior, key) && (journal.prior[key] === null || typeof journal.prior[key] === 'string'))
     || (journal.mode !== 'rollback' && (journal.mode !== 'restore' || !counter(journal.targetGeneration)
@@ -69,17 +71,97 @@ function historyUnchanged(before, after) {
     && ['snapshots', 'receipts'].every(key => Object.entries(before[key]).every(([id, value]) => equal(value, after[key][id])));
 }
 
+/** Validate a scoped board before exposing it, including every local record reference. */
+function validateScoped(board, seed) {
+  const {sites, program, uploads, audit, faults, scenario} = board;
+  validateAccess(board.users, board.session);
+  const record = value => value && typeof value === 'object' && !Array.isArray(value);
+  const check = ok => { if (!ok) throw new Error('Invalid program records.'); };
+  const hasSite = id => Object.hasOwn(sites, id);
+  const hasActor = id => Object.hasOwn(board.users, id) || Object.hasOwn(DIRECTORY, id);
+  const atSite = (id, siteId) => typeof id === 'string' && audit.snapshots[id]?.siteId === siteId;
+  const planOk = plan => record(plan) && Object.hasOwn(SUPPLIERS, plan.supplierId)
+    && SUPPLIERS[plan.supplierId].agreementId === plan.agreementId;
+  const rowOk = (row, key) => record(row) && row.row === key
+    && ['Ready', 'Not Ready', 'In progress', 'Unavailable'].includes(row.status)
+    && ['Current', 'Stale', 'Conflicting', 'Missing'].includes(row.quality)
+    && typeof row.source === 'string' && Array.isArray(row.observations)
+    && (row.quality !== 'Missing' || (row.status === 'Unavailable' && row.sourceAt === null))
+    && (row.quality !== 'Conflicting' || row.observations.length >= 2);
+  check([sites, program, audit, uploads, faults].every(record) && ['A', 'B', 'C', 'D'].includes(scenario));
+  check(program.cluster === seed.program.cluster && Object.keys(sites).length === Object.keys(seed.sites).length
+    && Object.keys(seed.sites).every(hasSite));
+  check(['crew', 'failures', 'design', 'notices', 'morning', 'trend', 'visitsAtStake'].every(key => Array.isArray(program[key]))
+    && [program.eco, program.sources, program.lastScore, audit.snapshots, audit.receipts].every(record)
+    && Array.isArray(audit.events) && [audit.generation, audit.nextSeq, audit.replaySeq, faults.rev, faults.retryFailuresRemaining].every(counter)
+    && [null, 'Up', 'Down'].includes(faults.ddlOverride)
+    && ['assessmentDown', 'scenarioAssessmentDown', 'scenarioDdlDown', 'forceLowConfidence'].every(key => typeof faults[key] === 'boolean'));
+  check(Object.keys(seed.program.sources).every(key => program.sources[key]?.sourceId === key)
+    && JSON.stringify(program.design) === JSON.stringify(seed.program.design));
+  const crew = new Map(program.crew.map(item => [item.id, item]));
+  check(crew.size === program.crew.length && program.crew.every(item => counter(item.rev)
+    && (item.siteId === null || hasSite(item.siteId)) && (item.leadId === null || hasActor(item.leadId))
+    && (item.size === null || counter(item.size))));
+  const decisions = new Map();
+  for (const [id, site] of Object.entries(sites)) {
+    check(site.id === id && planOk(site.plan) && [site.rev, site.planRev, site.evidenceRev].every(counter)
+      && ['open', 'dispatched', 'on_air'].includes(site.lifecycle) && typeof site.holdActive === 'boolean'
+      && (site.ownerId === null || hasActor(site.ownerId)) && record(site.rows) && Object.keys(site.rows).join() === ROW_ORDER.join()
+      && ROW_ORDER.every(key => rowOk(site.rows[key], key) && hasActor(site.rows[key].ownerId))
+      && [site.notes, site.decisions, site.executions].every(Array.isArray));
+    const score = site.assessment;
+    check(score === null || (score.siteId === id && atSite(score.snapshotId, id) && counter(score.confidence) && score.confidence <= 100
+      && (score.probability === null || (counter(score.probability) && score.probability <= 100))));
+    check(site.notes.every(note => hasActor(note.actorId)) && (site.proposal == null || site.proposal.ownerId === null || hasActor(site.proposal.ownerId)));
+    for (const item of site.decisions) {
+      check(!decisions.has(item.id) && hasActor(item.actorId) && planOk(item.before) && planOk(item.after)
+        && (item.assessmentRef == null || atSite(item.assessmentRef, id)));
+      decisions.set(item.id, id);
+    }
+    check(site.executions.every(item => hasActor(item.actorId) && crew.get(item.assignmentId)?.siteId === id
+      && (item.approvalId == null || decisions.get(item.approvalId) === id) && (item.snapshotId == null || atSite(item.snapshotId, id))));
+  }
+  check(Object.entries(audit.snapshots).every(([id, snap]) => snap.id === id && hasSite(snap.siteId) && planOk(snap.plan)
+    && counter(snap.planRev) && counter(snap.evidenceRev) && Array.isArray(snap.rows) && snap.rows.length === ROW_ORDER.length
+    && snap.rows.every((row, index) => rowOk(row, ROW_ORDER[index]))));
+  const ids = new Set();
+  let last = 0;
+  for (const event of audit.events) {
+    check(typeof event.id === 'string' && !ids.has(event.id) && counter(event.seq) && event.seq > last
+      && (event.siteId == null || hasSite(event.siteId)) && (event.snapshotId == null || atSite(event.snapshotId, event.siteId))
+      && (event.decisionId == null || decisions.get(event.decisionId) === event.siteId)
+      && (event.workflowId == null || program.eco[event.workflowId]?.siteId === event.siteId));
+    ids.add(event.id);
+    last = event.seq;
+  }
+  check(audit.nextSeq > last && Object.values(audit.receipts).every(item => record(item) && Object.hasOwn(board.users, item.actorId)
+    && typeof item.intentKey === 'string' && record(item.safeResult) && typeof item.safeResult.ok === 'boolean'));
+  check(Object.entries(uploads).every(([id, doc]) => doc.id === id && hasSite(doc.siteId) && ROW_ORDER.includes(doc.row)
+    && counter(doc.sizeBytes) && hasActor(doc.addedBy)));
+  check(Object.entries(program.eco).every(([id, item]) => item.id === id && decisions.get(item.decisionId) === item.siteId)
+    && program.visitsAtStake.every(hasSite) && [...program.failures, ...program.morning].every(item => hasSite(item.siteId))
+    && program.notices.every(item => item.siteId === null || hasSite(item.siteId)) && atSite(program.lastScore.snapshotId, program.lastScore.siteId));
+}
+
 /** Create a single-tab store using the Storage getItem/setItem/removeItem contract.
  *
  * Args:
  *   storage: The workshop origin's local storage or an injected synchronous adapter.
+ *   programId: A known program; secondary stores read but never write common access.
  * Returns:
  *   Bootstrap/recovery, stable snapshot subscription, transaction and reset methods.
  * Notes:
  *   Domain services authorize specific intents in their synchronous builder, using
  *   the live actor supplied by the store. Storage is not a production security boundary.
  */
-export function createStore(storage) {
+export function createStore(storage, programId = DEFAULT_PROGRAM) {
+  const scoped = programId !== DEFAULT_PROGRAM;
+  const seed = makeProgramBoard(programId);
+  const makeSeed = () => structuredClone(seed);
+  const validate = scoped ? board => validateScoped(board, seed) : validateBoard;
+  /** Resolve board keys and journals separately; access retains its historical prefix. */
+  const storageKey = key => scoped && !['users', 'session'].includes(key) ? keyOf(`program.${programId}.${key}`) : keyOf(key);
+  const journalKeys = scoped ? BOARD_KEYS : KEYS;
   let snapshot = null;
   let generation = null;
   let sessionEpoch = 0;
@@ -88,13 +170,13 @@ export function createStore(storage) {
 
   /** Apply a raw value exactly; null means the original key did not exist. */
   function write(key, raw) {
-    if (raw === null) storage.removeItem(keyOf(key));
-    else storage.setItem(keyOf(key), raw);
+    if (raw === null) storage.removeItem(storageKey(key));
+    else storage.setItem(storageKey(key), raw);
   }
 
   /** Read the specified keys without inventing values for unavailable records. */
   function read(keys) {
-    return Object.fromEntries(keys.map(key => [key, storage.getItem(keyOf(key))]));
+    return Object.fromEntries(keys.map(key => [key, storage.getItem(storageKey(key))]));
   }
 
   /** Publish only validated boards and defer notification until the guard is released. */
@@ -135,12 +217,12 @@ export function createStore(storage) {
 
   /** Roll forward an explicitly authorized restore using only the board keys. */
   function finishRestore(targetGeneration) {
-    const seed = makeBaseline();
+    const seed = makeSeed();
     const access = read(['users', 'session']);
     seed.users = decode(access.users);
     seed.session = access.session === null ? null : decode(access.session);
     seed.audit.generation = targetGeneration;
-    validateBoard(seed);
+    validate(seed);
     for (const key of BOARD_KEYS) write(key, encode(key, seed[key]));
     write(PENDING, null);
     return seed;
@@ -148,9 +230,9 @@ export function createStore(storage) {
 
   /** Resolve any journal before attempting to consume the current board. */
   function replayPending() {
-    const raw = storage.getItem(keyOf(PENDING));
+    const raw = storage.getItem(storageKey(PENDING));
     if (raw === null) return;
-    const journal = parseJournal(raw);
+    const journal = parseJournal(raw, journalKeys);
     if (journal.mode === 'restore') finishRestore(journal.targetGeneration);
     else rollback(journal);
   }
@@ -171,7 +253,7 @@ export function createStore(storage) {
       return ok(null);
     } catch {
       try {
-        const currentMarker = storage.getItem(keyOf(PENDING));
+        const currentMarker = storage.getItem(storageKey(PENDING));
         if (currentMarker === marker || (markerWritten && currentMarker === null)) {
           if (currentMarker === null) write(PENDING, marker);
           rollback(journal);
@@ -191,21 +273,22 @@ export function createStore(storage) {
   function load() {
     replayPending();
     const raw = read(KEYS);
-    const board = makeBaseline();
+    const board = makeSeed();
     const absent = {};
     for (const key of KEYS) {
       if (raw[key] !== null) board[key] = decode(raw[key]);
+      else if (key === 'users' && scoped) return recoveryError();
       else if (key !== 'session') absent[key] = encode(key, board[key]);
     }
     if (BOARD_KEYS.some(key => Object.hasOwn(absent, key))) {
-      const seed = makeBaseline();
+      const seed = makeSeed();
       // A changed adopted board cannot silently regain a missing mutable record.
       if (BOARD_KEYS.some(key => raw[key] !== null && JSON.stringify(board[key]) !== JSON.stringify(seed[key]))) {
         publish(null);
         return recoveryError();
       }
     }
-    validateBoard(board);
+    validate(board);
     const result = persist('bootstrap', absent, raw);
     if (!result.ok) return result;
     publish(board);
@@ -249,6 +332,7 @@ export function createStore(storage) {
   function commit(command, build) {
     return guarded(() => {
       const builder = typeof build === 'function' ? build : build?.build;
+      if (scoped && command?.sessionOnly) return fail('FORBIDDEN', 'Session changes use the shared access store.');
       if (!validId(command?.commandId) || (!builder && !build?.writes)
         || (command.intentKey !== undefined && typeof command.intentKey !== 'string')) return invalid();
       const loaded = load();
@@ -293,7 +377,7 @@ export function createStore(storage) {
           next.audit = {...next.audit, receipts: {...next.audit.receipts, [commandId]: {actorId: actor.id, intentKey, safeResult: result}}};
           prepared.audit = encode('audit', next.audit);
         }
-        validateBoard(next);
+        validate(next);
         if (!historyUnchanged(board.audit, next.audit)) return invalid();
       } catch {
         return invalid();
@@ -313,7 +397,7 @@ export function createStore(storage) {
       if (counter(value)) candidates.push(value);
     } catch { /* A damaged board may still be explicitly restored. */ }
     try {
-      const journal = parseJournal(rawJournal);
+      const journal = parseJournal(rawJournal, journalKeys);
       if (journal.mode === 'restore') candidates.push(journal.targetGeneration);
       const prior = decode(journal.prior.audit)?.generation;
       if (counter(prior)) candidates.push(prior);
@@ -341,7 +425,7 @@ export function createStore(storage) {
       } catch { return recoveryError(); }
       if (session?.userId !== PERSON.samira || session.role !== 'Facilitator') return fail('FORBIDDEN', 'Only the cluster administrator can restore the morning board.');
       const prior = read(BOARD_KEYS);
-      const currentGeneration = restoreFence(prior.audit, storage.getItem(keyOf(PENDING)));
+      const currentGeneration = restoreFence(prior.audit, storage.getItem(storageKey(PENDING)));
       if (command.expectedGeneration !== currentGeneration || !counter(currentGeneration + 1)
         || (command.expectedSessionToken !== undefined && command.expectedSessionToken !== session.token)
         || (command.expectedSessionEpoch !== undefined && command.expectedSessionEpoch !== sessionEpoch)) return fail('STALE_INTENT', CHANGED);
@@ -349,7 +433,7 @@ export function createStore(storage) {
       const marker = JSON.stringify({schemaVersion: SCHEMA_VERSION, commandId: command.commandId,
         mode: 'restore', keys: BOARD_KEYS, prior, targetGeneration});
       try { write(PENDING, marker); } catch {
-        if (storage.getItem(keyOf(PENDING)) === marker) { publish(null); return recoveryError(); }
+        if (storage.getItem(storageKey(PENDING)) === marker) { publish(null); return recoveryError(); }
         return writeError();
       }
       const board = finishRestore(targetGeneration);
@@ -363,7 +447,7 @@ export function createStore(storage) {
 
   /** Return the current restore fence without reading or publishing a broken board. */
   function getRestoreGeneration() {
-    try { return restoreFence(storage.getItem(keyOf('audit')), storage.getItem(keyOf(PENDING))); }
+    try { return restoreFence(storage.getItem(storageKey('audit')), storage.getItem(storageKey(PENDING))); }
     catch { return null; }
   }
 
@@ -384,10 +468,10 @@ export function createStore(storage) {
 }
 
 /** Defer browser storage access until the store can handle permission errors. */
-export function createBrowserStore() {
+export function createBrowserStore(programId = DEFAULT_PROGRAM) {
   return createStore({
     getItem: key => window.localStorage.getItem(key),
     setItem: (key, value) => window.localStorage.setItem(key, value),
     removeItem: key => window.localStorage.removeItem(key),
-  });
+  }, programId);
 }

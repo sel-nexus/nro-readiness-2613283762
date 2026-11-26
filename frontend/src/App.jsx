@@ -1,11 +1,12 @@
 /** Own the route tree, committed-board subscription and cross-page feedback. */
 import {useEffect, useRef, useState, useSyncExternalStore} from 'react';
 import PropTypes from 'prop-types';
-import {BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate, useParams} from 'react-router-dom';
+import {BrowserRouter, Link, Navigate, Route, Routes, matchPath, useLocation, useNavigate, useParams} from 'react-router-dom';
 import {SharedShell} from './components/SharedShell.jsx';
 import {RestoreDialog} from './components/RestoreDialog.jsx';
 import LoginPage from './pages/LoginPage.jsx';
-import Portfolio from './pages/Portfolio.jsx';
+import Portfolio, {ProgramBoard, ProgramList} from './pages/Portfolio.jsx';
+import {DEFAULT_PROGRAM, PROGRAMS, siteProgram} from './data/programs.js';
 import ServiceHealth from './pages/ServiceHealth.jsx';
 import SiteWorkspace from './pages/SiteWorkspace.jsx';
 import {readSources, RESTORE_TITLE, selectShellHealth} from './services/sources.js';
@@ -17,7 +18,7 @@ function MissingPage({title}) {
   return (
     <section className="card p-5">
       <h1 className="text-title font-semibold text-ink">{title}</h1>
-      <Link className="mt-3 inline-block font-medium text-teal-ink underline" to="/">Back to Portfolio</Link>
+      <Link className="btn mt-3" to="/">Back to Programs</Link>
     </section>
   );
 }
@@ -35,8 +36,33 @@ function ReleasedSite({board, actor, store, notify}) {
 ReleasedSite.propTypes = {board: PropTypes.object.isRequired, actor: PropTypes.object.isRequired,
   store: PropTypes.object.isRequired, notify: PropTypes.func.isRequired};
 
-/** Render protected content only from a validated committed snapshot. */
-function BoardRoutes({store}) {
+/** Resolve one scope from the URL and reject conflicting site and program parameters. */
+function programFromLocation({pathname, search}) {
+  const rawSite = matchPath('/sites/:siteId', pathname)?.params.siteId;
+  let inferred;
+  try { if (rawSite) inferred = siteProgram(decodeURIComponent(rawSite)); } catch { return null; }
+  const values = new URLSearchParams(search).getAll('program');
+  if (!values.length) return inferred || DEFAULT_PROGRAM;
+  const [explicit] = values;
+  return values.length === 1 && Object.hasOwn(PROGRAMS, explicit) && (!inferred || inferred === explicit) ? explicit : null;
+}
+
+/** Resolve shared access before creating or opening a secondary program store. */
+function ProgramAccess({accessStore}) {
+  const location = useLocation();
+  const access = useSyncExternalStore(accessStore.subscribe, accessStore.getSnapshot);
+  const actor = readAccess(access);
+  const programId = programFromLocation(location);
+  const allowed = actor && !resolveRoute(location.pathname, actor);
+  const scope = allowed && programId ? programId : DEFAULT_PROGRAM;
+  return <BoardRoutes key={scope} accessStore={accessStore} programId={scope} validProgram={programId !== null} />;
+}
+
+ProgramAccess.propTypes = {accessStore: PropTypes.object.isRequired};
+
+/** Render protected content only from a validated committed snapshot in the requested scope. */
+function BoardRoutes({accessStore, programId, validProgram}) {
+  const [store] = useState(() => programId === DEFAULT_PROGRAM ? accessStore : createBrowserStore(programId));
   const board = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const [boot, setBoot] = useState(null);
   const [query, setQuery] = useState('');
@@ -94,7 +120,7 @@ function BoardRoutes({store}) {
   );
   const decision = board && resolveRoute(location.pathname, actor);
   if (decision) return <Navigate replace to={decision.to} state={decision.message ? {message: decision.message} : undefined} />;
-  if (board && !actor) return <LoginPage onSignIn={input => signIn(store, input)} onContinue={id => continueAs(store, id)} />;
+  if (!actor && board) return <LoginPage onSignIn={input => signIn(accessStore, input)} onContinue={id => continueAs(accessStore, id)} />;
   const sources = board ? readSources(board.program, board.faults) : [];
   return (
     <>
@@ -112,12 +138,17 @@ function BoardRoutes({store}) {
           </section>
         </main>
       ) : (
-        <SharedShell key={`${store.getSessionEpoch()}:${board.audit.generation}`} board={board} actor={actor} query={query} onQuery={setQuery}
+        <SharedShell key={`${store.getSessionEpoch()}:${board.audit.generation}`} board={board} actor={actor} programId={programId} query={query} onQuery={setQuery}
           sourceStatus={selectShellHealth(sources)} onRestore={openRestore}
-          onSwitch={id => changeAccess(switchUser(store, id))} onSignOut={() => changeAccess(signOut(store))}>
+          onSwitch={id => changeAccess(switchUser(accessStore, id))} onSignOut={() => changeAccess(signOut(accessStore))}>
           {location.state?.message && <p role="status" className="mb-3 rounded-control border border-line bg-card px-3 py-2">{location.state.message}</p>}
-          <Routes>
-            <Route path="/" element={<Portfolio board={board} actor={actor} query={query} />} />
+          {!validProgram ? <MissingPage title="Program not found" /> : <Routes>
+            <Route path="/" element={<Portfolio />} />
+            <Route path="/portfolio" element={<Portfolio />} />
+            <Route path="/board" element={<ProgramBoard board={board} programId={programId} query={query} />} />
+            <Route path="/schedule" element={<ProgramList board={board} page="Schedule" />} />
+            <Route path="/activity" element={<ProgramList board={board} page="Activity" />} />
+            <Route path="/approvals" element={<ProgramList board={board} page="Approvals" />} />
             <Route path="/sites/:siteId" element={
               <ReleasedSite board={board} actor={actor} store={store} notify={notify} />
             } />
@@ -125,7 +156,7 @@ function BoardRoutes({store}) {
               <ServiceHealth board={board} sources={sources} store={store} notify={notify} onRestore={openRestore} />
             } />
             <Route path="*" element={<MissingPage title="Page not found" />} />
-          </Routes>
+          </Routes>}
         </SharedShell>
       )}
       {restoreIntent && <RestoreDialog store={store} intent={restoreIntent} onDismiss={closeRestore} onRestored={() => {
@@ -144,14 +175,14 @@ function BoardRoutes({store}) {
   );
 }
 
-BoardRoutes.propTypes = {store: PropTypes.object.isRequired};
+BoardRoutes.propTypes = {accessStore: PropTypes.object.isRequired, programId: PropTypes.string.isRequired, validProgram: PropTypes.bool.isRequired};
 
 /** Mount the board in one browser router and obtain storage only through its adapter. */
 export default function App() {
   const [store] = useState(createBrowserStore);
   return (
     <BrowserRouter future={{v7_startTransition: true, v7_relativeSplatPath: true}}>
-      <BoardRoutes store={store} />
+      <ProgramAccess accessStore={store} />
     </BrowserRouter>
   );
 }
