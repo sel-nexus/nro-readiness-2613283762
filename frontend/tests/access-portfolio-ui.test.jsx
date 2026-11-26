@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import {webcrypto} from 'node:crypto';
+import {createHash, webcrypto} from 'node:crypto';
 import {cleanup, render, screen, waitFor, within} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import App from '../src/App.jsx';
-import {makeBaseline} from '../src/data/baseline.js';
+
 import {DEFAULT_PROGRAM, makeProgramBoard} from '../src/data/programs.js';
 import {continueAs} from '../src/utils/access.js';
 import {PERSON} from '../src/data/people.js';
@@ -188,7 +188,7 @@ it('switches scoped searches, notifications, queues and site links without retai
   await user.type(search(), 'Harbor{Enter}');
   expect(screen.getByText('No site matches that name in East Bay Cluster 2.')).toBeVisible();
   await user.click(within(screen.getByRole('navigation', {name: 'Program', exact: true})).getByRole('link', {name: 'Approvals'}));
-  const waiting = await screen.findByRole('link', {name: 'Marsh Junction'});
+  const waiting = await screen.findByRole('link', {name: 'Open Marsh Junction approval'});
   expect(waiting).toHaveAttribute('href', '/sites/NRO-E-2102?tab=approval');
   await user.click(waiting);
   expect(await screen.findByRole('heading', {name: /Marsh Junction/, level: 1})).toBeVisible();
@@ -199,18 +199,86 @@ it('switches scoped searches, notifications, queues and site links without retai
   expect(screen.queryByRole('link', {name: 'Review Delta Landing'})).not.toBeInTheDocument();
 });
 
-it('rejects conflicting site and program scopes on a direct link', async () => {
+it.each([
+  ['a conflicting site scope', '/sites/NRO-W-1842?program=east-bay'],
+  ['an unknown program', '/board?program=unknown'],
+  ['an empty explicit program', '/sites/NRO-E-2102?program='],
+  ['duplicate identical programs', '/sites/NRO-E-2102?program=east-bay&program=east-bay'],
+  ['duplicate different programs', '/board?program=east-bay&program=north-valley'],
+  ['a malformed encoded site ID with a valid secondary scope', '/sites/NRO-E-2102%?program=east-bay'],
+])('rejects %s without opening a program board or site', async (_case, path) => {
   const access = createBrowserStore();
   expect(access.bootstrap().ok).toBe(true);
   expect(continueAs(access, PERSON.marcus).ok).toBe(true);
-  window.history.replaceState(null, '', '/sites/NRO-W-1842?program=east-bay');
+  const before = Object.entries(localStorage);
+  window.history.replaceState(null, '', path);
   render(<App />);
   expect(await screen.findByRole('heading', {name: 'Program not found'})).toBeVisible();
+  expect(screen.getByRole('link', {name: 'Back to Programs'})).toHaveAttribute('href', '/');
+  expect(window.location.pathname + window.location.search).toBe(path);
   expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+  expect(screen.queryByRole('table', {name: 'Site readiness register'})).not.toBeInTheDocument();
+  expect(Object.entries(localStorage)).toEqual(before);
+});
+
+it.each(['?tab=approval', '?tab=approval&program=east-bay'])(
+  'opens the inferred East Bay site with %s and selects its Approval tab', async search => {
+    const access = createBrowserStore();
+    expect(access.bootstrap().ok).toBe(true);
+    expect(continueAs(access, PERSON.marcus).ok).toBe(true);
+    window.history.replaceState(null, '', `/sites/NRO-E-2102${search}`);
+    render(<App />);
+
+    expect(await screen.findByRole('heading', {name: /Marsh Junction/, level: 1})).toBeVisible();
+    expect(screen.getByRole('tab', {name: 'Approval', selected: true})).toBeVisible();
+    expect(screen.getByLabelText('Active program')).toHaveValue('east-bay');
+    expect(window.location.search).toBe(search);
+  },
+);
+
+it('shows a six-minute source sync age in the header of all four programs', async () => {
+  const user = await openPortfolio();
+  for (const program of ['west-metro', 'east-bay', 'north-valley', 'south-shore']) {
+    await user.selectOptions(screen.getByLabelText('Active program'), program);
+    const selector = screen.getByLabelText('Active program');
+    expect(selector).toHaveValue(program);
+    expect(within(selector.closest('header')).getByText('Sources synced 6 min ago', {exact: true})).toBeVisible();
+  }
+});
+
+it.each([
+  ['east-bay', 12, 'NRO-E-2101', 'Delta Landing', 'Suisun Waterfront', '2026-05-18', 36, 85, 'Power', 'Utility handoff incomplete', PERSON.ruth],
+  ['north-valley', 2, 'NRO-N-3101', 'Orchard Exchange', 'Mill Creek Orchard District', '2026-06-01', 64, 78, 'Permit', 'Pilot permit under review', PERSON.denise],
+  ['south-shore', 4, 'NRO-S-7101', 'Dune Crossing', 'Moss Landing Dunes', '2026-05-26', 31, 82, 'Permit', 'Site access permit suspended', PERSON.denise],
+])('seeds %s with its own site identity, plan, assessment and blocker evidence',
+  (program, count, id, name, neighborhood, plannedDay, probability, confidence, targetRow, blocker, ownerId) => {
+    const {sites, audit} = makeProgramBoard(program);
+    expect(Object.keys(sites)).toHaveLength(count);
+    expect(sites[id]).toMatchObject({id, name, neighborhood, ownerId, blocker, plan: {plannedDay},
+      assessment: {siteId: id, probability, confidence, plannedDay}, proposal: {targetRow},
+      rows: {[targetRow]: {detail: blocker}}});
+    expect(audit.snapshots[sites[id].assessment.snapshotId]).toMatchObject({siteId: id});
+  },
+);
+
+it('matches the adopted West Metro morning board and bootstraps the six adopted accounts and roles', () => {
+  // SHA-256 of the ordered [key, value] pairs from makeBaseline() extracted from
+  // dcf25effc639fa5b218bc66c9cb64b162398fd11, not from the current worktree.
+  const keys = ['scenario', 'sites', 'program', 'audit', 'uploads', 'faults'];
+  const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  const boardDigest = board => digest(keys.map(key => [key, board[key]]));
+  const adoptedBoard = '4f0c71d85517d3fa5f989fb7c4f0aedb94c6f6d29d62f2c361ec22a6a5ec9dbd';
+  // SHA-256 of JSON.stringify(USERS) from frontend/src/data/people.js at the same revision.
+  const adoptedAccounts = 'a49372ddf5e6f232c2759eb9eeec410f3ae86370017b2ce2bc3cdb872d7e91b5';
+  expect(boardDigest(makeProgramBoard(DEFAULT_PROGRAM))).toBe(adoptedBoard);
+  const boot = createBrowserStore().bootstrap();
+  expect(boot.ok).toBe(true);
+  expect(boardDigest(boot.data)).toBe(adoptedBoard);
+  expect(Object.keys(boot.data.users)).toHaveLength(6);
+  expect(digest(boot.data.users)).toBe(adoptedAccounts);
 });
 
 it('keeps West Metro bytes and other programs unchanged when another program writes', () => {
-  expect(makeProgramBoard(DEFAULT_PROGRAM)).toEqual(makeBaseline());
   const west = createBrowserStore();
   expect(west.bootstrap().ok).toBe(true);
   expect(continueAs(west, PERSON.marcus).ok).toBe(true);

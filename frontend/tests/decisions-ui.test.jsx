@@ -16,6 +16,7 @@ import {runAssessment} from '../src/services/assessment.js';
 import {continueAs, readAccess} from '../src/utils/access.js';
 import {deriveReadiness} from '../src/utils/readiness.js';
 import {createStore} from '../src/utils/storage.js';
+import * as storage from '../src/utils/storage.js';
 
 const PORTSIDE = 'NRO-W-1866';
 const CIVIC = 'NRO-W-1847';
@@ -145,6 +146,68 @@ it('retains the site rationale through a real failed assessment on the same page
   expect(store.getSnapshot().sites[PORTSIDE].decisions).toEqual([
     expect.objectContaining({verb: 'approve', rationale, workflowId: 'ECO-1866-1'}),
   ]);
+});
+
+it('retains a routed East Bay queue draft through a failed assessment, but clears it on program or persona changes', async () => {
+  const access = createStore(localStorage);
+  expect(access.bootstrap().ok).toBe(true);
+  expect(continueAs(access, PERSON.priya).ok).toBe(true);
+  window.history.replaceState(null, '', '/approvals?program=east-bay');
+  // Observe the factory's real store so the command publishes to the mounted route's subscribers.
+  const browserStore = vi.spyOn(storage, 'createBrowserStore');
+  try {
+    const user = userEvent.setup();
+    render(<App />);
+    const request = () => within(screen.getByRole('region', {name: 'Marsh Junction'}));
+    await screen.findByRole('region', {name: 'Marsh Junction'});
+    const eastIndex = browserStore.mock.calls.findIndex(([program]) => program === 'east-bay');
+    const east = browserStore.mock.results[eastIndex].value;
+    const rationale = () => request().getByRole('textbox', {name: REASON_LABEL});
+    const selector = () => screen.getByRole('combobox', {name: 'Active program'});
+    const draft = 'Verify the East Bay civil handoff before committing.';
+    const before = east.getSnapshot().sites[MARSH];
+    await user.type(rationale(), draft);
+    await act(async () => {
+      const {faults} = east.getSnapshot();
+      expect(east.commit({commandId: 'east-queue-outage'}, {writes: {
+        faults: {...faults, rev: faults.rev + 1, assessmentDown: true},
+      }}).ok).toBe(true);
+      const result = await runAssessment(east, {
+        commandId: 'east-queue-failed-run', siteId: MARSH, expectedSiteRev: before.rev,
+      });
+      expect(result).toMatchObject({ok: true, data: {state: 'retained_outage'}});
+    });
+    const after = east.getSnapshot();
+    expect(after.sites[MARSH]).toMatchObject({rev: before.rev + 1, assessment: before.assessment, decisions: []});
+    expect(after.audit.events.at(-1)).toMatchObject({siteId: MARSH, verb: 'Assessment failed'});
+    expect(rationale()).toHaveValue(draft);
+    expect(request().getByText('Approver: Priya Raman · Pending approval')).toBeVisible();
+
+    await user.selectOptions(selector(), 'west-metro');
+    const portside = within(await screen.findByRole('region', {name: 'Portside'}));
+    expect(portside.getByRole('textbox', {name: REASON_LABEL})).toHaveValue('');
+    expect(screen.queryByRole('region', {name: 'Marsh Junction'})).not.toBeInTheDocument();
+    await user.selectOptions(selector(), 'east-bay');
+    await screen.findByRole('region', {name: 'Marsh Junction'});
+    expect(rationale()).toHaveValue('');
+    await user.type(rationale(), 'Another draft that must not survive the persona handoff.');
+
+    const switchTo = async (from, to) => {
+      await user.click(screen.getByRole('button', {name: from, exact: true}));
+      await user.click(screen.getByRole('button', {name: 'Switch user', exact: true}));
+      await user.click(screen.getByRole('button', {name: to, exact: true}));
+      await user.click(await screen.findByRole('link', {name: 'Open East Bay Cluster 2', exact: true}));
+      await user.click(screen.getByRole('link', {name: 'Approvals', exact: true}));
+      await screen.findByRole('region', {name: 'Marsh Junction'});
+    };
+    await switchTo('Priya Raman Program Manager', 'Jordan Ellis · Regional Viewer');
+    expect(request().queryByRole('textbox', {name: REASON_LABEL})).not.toBeInTheDocument();
+    expect(request().getByRole('button', {name: 'Approve', exact: true})).toBeDisabled();
+    await switchTo('Jordan Ellis Regional Viewer', 'Priya Raman · Program Manager');
+    expect(rationale()).toHaveValue('');
+  } finally {
+    browserStore.mockRestore();
+  }
 });
 
 /** Connect the panels to real committed snapshots, just as the workspace does. */

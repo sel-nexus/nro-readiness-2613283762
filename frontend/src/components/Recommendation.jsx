@@ -8,6 +8,17 @@ import {formatDate, personName, sitePath} from '../utils/portfolio.js';
 
 const KINDS = {blocker: 'Blocker', repair: 'Evidence repair', pending: 'Pending action', watch: 'Watch item'};
 
+/** Explain an empty blocker ranking without authorizing field execution. */
+function noBlockerMessage(site, readiness, ranked) {
+  if (site.lifecycle !== 'open') return 'This site is not awaiting a ranked intervention.';
+  if (site.holdActive) return 'No ranked blocker. Keep the crew on hold.';
+  if (!readiness.current || readiness.probability == null) {
+    return 'No verified ranked blocker. A current readiness score is unavailable.';
+  }
+  if (ranked.some(item => item.kind !== 'watch')) return 'No verified ranked blocker. Review the follow-up below.';
+  return 'No ranked blocker. Check field requirements before dispatch.';
+}
+
 /** Render one next-best action and keep consequential alternatives as navigation. */
 export function Recommendation({board, site, actor, store, readiness, notify}) {
   const ranked = rank(site, readiness);
@@ -32,11 +43,9 @@ export function Recommendation({board, site, actor, store, readiness, notify}) {
   return (
     <section className="card space-y-4 p-4" aria-labelledby="ranked-heading">
       <h2 id="ranked-heading">Blockers and action</h2>
-      <p className="meta">The assessment recommends follow-up. Field execution uses the observed evidence and required approvals.</p>
+      <p className="meta">Recommendations are for follow-up. Field execution uses the observed evidence and required approvals.</p>
       {!ranked.some(item => item.kind === 'blocker') && (
-        <p>{!active ? 'This site is not awaiting a ranked intervention.' : ranked.some(item => item.kind !== 'watch')
-          ? 'No verified ranked blocker. Review the follow-up below before proceeding.'
-          : 'No ranked blocker. This site can proceed on the current plan.'}</p>
+        <p>{noBlockerMessage(site, readiness, ranked)}</p>
       )}
       {!!ranked.length && (
         <ol className="divide-y divide-line border-y border-line" aria-label="Ranked prerequisites">
@@ -44,7 +53,7 @@ export function Recommendation({board, site, actor, store, readiness, notify}) {
             <li key={item.row} className="grid gap-1 py-2 sm:grid-cols-2">
               <p className="font-medium">{KINDS[item.kind]} · {item.row} · {item.status} ({item.quality})</p>
               <p className="text-muted">
-                {personName(board, item.ownerId)} · {(board.users[item.ownerId] ?? DIRECTORY[item.ownerId])?.phone ?? 'Phone unavailable'}
+                {personName(board, item.ownerId)} · {(board.users[item.ownerId] ?? DIRECTORY[item.ownerId])?.phone?.slice(-4) ?? 'Phone unavailable'}
               </p>
               <p className="meta sm:col-span-2">
                 Estimated resolution: {item.window ?? (item.dueDay
@@ -57,7 +66,9 @@ export function Recommendation({board, site, actor, store, readiness, notify}) {
       )}
       {active && proposal && (
         <div className="space-y-2">
-          <h3 className="font-semibold">Assessment recommendation</h3>
+          <h3 className="font-semibold">
+            Assessment recommendation{!newBlocker && !readiness.current ? ' · Historical' : ''}
+          </h3>
           <p className="font-medium">
             {newBlocker
               ? `Follow up on ${newBlocker.row}`

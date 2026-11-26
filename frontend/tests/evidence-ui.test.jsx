@@ -1,16 +1,18 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import {cleanup, fireEvent, render, screen, waitFor, within} from '@testing-library/react';
+import {act, cleanup, fireEvent, render, screen, waitFor, within} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {useSyncExternalStore} from 'react';
 import {MemoryRouter} from 'react-router-dom';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
+import App from '../src/App.jsx';
 import {EvidenceMatrix} from '../src/components/EvidenceMatrix.jsx';
 import {PredictionPanel} from '../src/components/PredictionPanel.jsx';
-import {PERSON} from '../src/data/people.js';
+import {DIRECTORY, PERSON} from '../src/data/people.js';
+import {ProgramBoard} from '../src/pages/Portfolio.jsx';
 import SiteWorkspace from '../src/pages/SiteWorkspace.jsx';
-import {siteProgram} from '../src/data/programs.js';
-import {continueAs, readAccess} from '../src/utils/access.js';
+import {makeProgramBoard, siteProgram} from '../src/data/programs.js';
+import {continueAs, readAccess, switchUser} from '../src/utils/access.js';
 import {deriveReadiness} from '../src/utils/readiness.js';
 import {createBrowserStore} from '../src/utils/storage.js';
 
@@ -25,6 +27,7 @@ const dialogMethods = {
 
 beforeEach(() => {
   localStorage.clear();
+  window.history.replaceState({}, '', '/');
   // Supply only the native dialog methods not implemented by jsdom.
   for (const [name, value] of Object.entries(dialogMethods)) {
     if (!originalDialogMethods[name]?.value) Object.defineProperty(dialogPrototype, name, {configurable: true, value});
@@ -57,7 +60,7 @@ function renderEvidence({person = PERSON.elena, siteId = HARBOR, prediction = fa
     const board = useSyncExternalStore(store.subscribe, store.getSnapshot);
     const site = board.sites[siteId];
     const props = {board, site, store, actor: readAccess(board), readiness: deriveReadiness(site, undefined, board.faults)};
-    if (tab) return <SiteWorkspace {...props} notify={notify} />;
+    if (tab) return <main><SiteWorkspace {...props} notify={notify} /></main>;
     return (
       <>
         <EvidenceMatrix {...props} notify={notify} />
@@ -73,6 +76,241 @@ function renderEvidence({person = PERSON.elena, siteId = HARBOR, prediction = fa
   );
   return store;
 }
+
+it.each([
+  ['Ready', null, 'Power evidence shows Ready.'],
+  ['In progress', null, 'Power evidence shows In progress.'],
+  ['Not Ready', '2026-04-30T09:00', 'Verify Power evidence.'],
+  ['Unavailable', '', 'Verify Power evidence.'],
+  ['Unavailable', null, 'Verify Power evidence.'],
+])('updates the Harbor Point decision for Power %s at %s without lifting the hold', async (status, sourceAt, detail) => {
+  const user = userEvent.setup();
+  const store = createBrowserStore();
+  expect(store.bootstrap().ok).toBe(true);
+  expect(continueAs(store, PERSON.elena).ok).toBe(true);
+  window.history.replaceState({}, '', '/board');
+  render(<App />);
+  const main = within(await screen.findByRole('main'));
+  const morning = 'Harbor Point is on hold. Power is not ready.';
+  expect(main.getByText(morning, {exact: true})).toBeVisible();
+  await user.click(main.getByRole('link', {name: 'Review Harbor Point'}));
+  await user.click(main.getByRole('button', {name: 'Update Power'}));
+  const drawer = within(main.getByRole('dialog', {name: 'Update Power evidence'}));
+  await user.selectOptions(drawer.getByLabelText('Status'), status);
+  if (sourceAt !== null) fireEvent.change(drawer.getByLabelText('Evidence date and time'), {target: {value: sourceAt}});
+  await user.click(drawer.getByRole('button', {name: 'Save evidence'}));
+  expect(main.getByRole('heading', {level: 1})).toHaveTextContent(/Harbor Point is .+\. Keep the crew on hold\./);
+  const nav = within(screen.getByRole('navigation', {name: 'Program'}));
+  const boardNav = nav.getByRole('link', {name: 'Board', exact: true});
+  expect(boardNav).toHaveAttribute('aria-current', 'location');
+  await user.click(main.getByRole('link', {name: 'Board', exact: true}));
+  expect(await main.findByText(`Harbor Point is on hold. ${detail}`, {exact: true})).toBeVisible();
+  expect(main.queryByText(morning, {exact: true})).not.toBeInTheDocument();
+  const harbor = within(main.getByRole('row', {name: /Harbor Point/}));
+  expect(harbor.getByRole('cell', {name: 'Hold', exact: true})).toBeVisible();
+  expect(harbor.getByRole('cell', {name: 'Unavailable', exact: true})).toBeVisible();
+});
+
+it.each([
+  ['dispatched', 'Harbor Point has been dispatched.', null],
+  ['on_air', 'Harbor Point is on air.', '2026-05-12T09:30:00'],
+])('renders the recorded Harbor Point lifecycle %s instead of open-site advice', (lifecycle, decision, closedAt) => {
+  // The UI cannot clear Harbor's seed hold; exercise supported historical records as component inputs.
+  const board = makeProgramBoard();
+  const harbor = board.sites[HARBOR];
+  const site = {
+    ...harbor, lifecycle, holdActive: false, plan: {...harbor.plan, closedAt},
+    disposition: lifecycle === 'dispatched' ? 'Dispatched' : 'On air',
+  };
+  const historical = {...board, sites: {...board.sites, [HARBOR]: site}};
+  render(
+    <MemoryRouter initialEntries={['/board']} future={{v7_startTransition: true, v7_relativeSplatPath: true}}>
+      <ProgramBoard board={historical} programId="west-metro" query="" />
+    </MemoryRouter>,
+  );
+  expect(screen.getByText(decision, {exact: true})).toBeVisible();
+  expect(screen.queryByText('Harbor Point is on hold. Power is not ready.', {exact: true})).not.toBeInTheDocument();
+});
+
+it.each([
+  ['east-bay', 'Delta Landing', 'Power', 'Ready', 'Delta Landing is on hold. The utility handoff is incomplete.',
+    'Delta Landing is on hold. Power evidence shows Ready.'],
+  ['north-valley', 'Orchard Exchange', 'Permit', 'Ready', 'Orchard Exchange needs a permit before the pilot visit can proceed.',
+    'Review Orchard Exchange before committing a crew. Permit evidence shows Ready.'],
+  ['north-valley', 'Orchard Exchange', 'Permit', 'Not Ready', 'Orchard Exchange needs a permit before the pilot visit can proceed.',
+    'Review Orchard Exchange before committing a crew. Permit is not ready.'],
+  ['south-shore', 'Dune Crossing', 'Permit', 'Ready', 'Dune Crossing remains on hold after a failed visit. Site access is not ready.',
+    'Dune Crossing is on hold. Permit evidence shows Ready.'],
+])('updates the %s Board when %s %s becomes %s', async (program, site, row, status, morning, updated) => {
+  const user = userEvent.setup();
+  const west = createBrowserStore();
+  expect(west.bootstrap().ok).toBe(true);
+  expect(continueAs(west, PERSON.elena).ok).toBe(true);
+  const harbor = west.getSnapshot().sites[HARBOR];
+  window.history.replaceState({}, '', `/board?program=${program}`);
+  render(<App />);
+  const main = within(await screen.findByRole('main'));
+  expect(main.getByText(morning, {exact: true})).toBeVisible();
+  await user.click(main.getByRole('link', {name: `Review ${site}`}));
+  await user.click(main.getByRole('button', {name: `Update ${row}`}));
+  const drawer = within(main.getByRole('dialog', {name: `Update ${row} evidence`}));
+  await user.selectOptions(drawer.getByLabelText('Status'), status);
+  await user.click(drawer.getByRole('button', {name: 'Save evidence'}));
+  await user.click(main.getByRole('link', {name: 'Board', exact: true}));
+  expect(await main.findByText(updated, {exact: true})).toBeVisible();
+  expect(main.queryByText(morning, {exact: true})).not.toBeInTheDocument();
+  expect(west.recover().data.sites[HARBOR]).toEqual(harbor);
+});
+
+it('keeps Harbor on hold after a Ready Power edit removes the ranked blocker', async () => {
+  const user = userEvent.setup();
+  const store = renderEvidence({tab: 'evidence'});
+  await user.click(screen.getByRole('button', {name: 'Update Power'}));
+  const drawer = within(screen.getByRole('dialog', {name: 'Update Power evidence'}));
+  await user.selectOptions(drawer.getByLabelText('Status'), 'Ready');
+  await user.click(drawer.getByRole('button', {name: 'Save evidence'}));
+  expect(within(screen.getByRole('row', {name: /^Power\b/})).getByRole('cell', {name: 'Ready', exact: true})).toBeVisible();
+  await user.click(screen.getByRole('tab', {name: 'Blockers and action'}));
+
+  const action = within(screen.getByRole('region', {name: 'Blockers and action'}));
+  expect(action.queryByRole('list', {name: 'Ranked prerequisites'})).not.toBeInTheDocument();
+  expect(action.queryByText(/can proceed/i)).not.toBeInTheDocument();
+  expect(action.getByText('No ranked blocker. Keep the crew on hold.')).toBeVisible();
+
+  act(() => { expect(switchUser(store, PERSON.andre).ok).toBe(true); });
+  const dispatch = within(screen.getByRole('region', {name: 'Field execution'})).getByRole('button', {name: 'Dispatch crew'});
+  expect(dispatch).toBeDisabled();
+  expect(dispatch).toHaveAccessibleDescription('The site is on hold.');
+});
+
+it('keeps watch-only evidence from implying clearance after the score becomes historical', async () => {
+  const user = userEvent.setup();
+  renderEvidence({siteId: 'NRO-W-1878', tab: 'action'});
+  expect(screen.getByText('No ranked blocker. Check field requirements before dispatch.')).toBeVisible();
+
+  await user.click(screen.getByRole('tab', {name: 'Evidence'}));
+  await user.click(screen.getByRole('button', {name: 'Update Civil'}));
+  const drawer = within(screen.getByRole('dialog', {name: 'Update Civil evidence'}));
+  await user.selectOptions(drawer.getByLabelText('Status'), 'In progress');
+  await user.click(drawer.getByRole('button', {name: 'Save evidence'}));
+  await user.click(screen.getByRole('tab', {name: 'Blockers and action'}));
+
+  expect(screen.getByText('Assessment · Last probability (historical) · Confidence')).toBeVisible();
+  const action = within(screen.getByRole('region', {name: 'Blockers and action'}));
+  expect(action.getByRole('list', {name: 'Ranked prerequisites'})).toHaveTextContent('Watch item · Civil');
+  expect(action.queryByText(/can proceed/i)).not.toBeInTheDocument();
+  expect(action.getByText('No verified ranked blocker. A current readiness score is unavailable.')).toBeVisible();
+});
+
+it('shows Portside’s exact pending follow-up without clearing dispatch', () => {
+  renderEvidence({person: PERSON.andre, siteId: 'NRO-W-1866', tab: 'action'});
+  const action = within(screen.getByRole('region', {name: 'Blockers and action'}));
+  expect(action.getByText('No verified ranked blocker. Review the follow-up below.', {exact: true})).toBeVisible();
+  const ranked = within(action.getByRole('list', {name: 'Ranked prerequisites'}));
+  expect(ranked.getByText('Pending action · Power · In progress (Current)', {exact: true})).toBeVisible();
+  expect(action.getByRole('heading', {name: 'Assessment recommendation', exact: true})).toBeVisible();
+  expect(action.getByText('Pending approval · Ask Priya to move the pad from Northwind Power to Civic Civil and the date from 15 May to 19 May.', {exact: true})).toBeVisible();
+  expect(action.getByText('Owner: Priya Raman · Due: 12 May 2026', {exact: true})).toBeVisible();
+  expect(action.getByRole('link', {name: 'Review in Approval'})).toHaveAttribute('href', '/sites/NRO-W-1866?tab=approval');
+  const dispatch = within(screen.getByRole('region', {name: 'Field execution'})).getByRole('button', {name: 'Dispatch crew'});
+  expect(dispatch).toBeDisabled();
+  expect(dispatch).toHaveAccessibleDescription('Dispatch requires all mandatory evidence to be Current and Ready.');
+});
+
+it('labels Civic Center’s retained recommendation historical and blocks dispatch during an outage', () => {
+  const store = renderEvidence({person: PERSON.andre, siteId: 'NRO-W-1847', tab: 'action'});
+  const action = within(screen.getByRole('region', {name: 'Blockers and action'}));
+  const field = within(screen.getByRole('region', {name: 'Field execution'}));
+  const followUp = 'Recommended · Andre dispatches Luis Ortega, crew of 4, 16 May 07:00.';
+  expect(action.getByRole('heading', {name: 'Assessment recommendation', exact: true})).toBeVisible();
+  expect(action.getByText(followUp, {exact: true})).toBeVisible();
+  expect(field.getByRole('button', {name: 'Dispatch crew'})).toBeEnabled();
+
+  const {faults} = store.getSnapshot();
+  act(() => {
+    expect(store.commit({commandId: 'civic-assessment-outage'}, {writes: {
+      faults: {...faults, rev: faults.rev + 1, assessmentDown: true},
+    }}).ok).toBe(true);
+  });
+
+  expect(action.getByText('No verified ranked blocker. A current readiness score is unavailable.')).toBeVisible();
+  expect(action.getByText(followUp, {exact: true})).toBeVisible();
+  const dispatch = field.getByRole('button', {name: 'Dispatch crew'});
+  expect(dispatch).toBeDisabled();
+  expect(dispatch).toHaveAccessibleDescription('Dispatch requires a current assessment.');
+  expect(action.getByRole('heading', {name: 'Assessment recommendation · Historical', exact: true})).toBeVisible();
+});
+
+it('does not advise proceeding when an outage leaves an unranked site without a current score', () => {
+  renderEvidence({siteId: 'NRO-W-1884', tab: 'action', down: true});
+  const action = within(screen.getByRole('region', {name: 'Blockers and action'}));
+  expect(action.queryByRole('list', {name: 'Ranked prerequisites'})).not.toBeInTheDocument();
+  expect(action.queryByText(/can proceed/i)).not.toBeInTheDocument();
+  expect(action.getByText('No verified ranked blocker. A current readiness score is unavailable.')).toBeVisible();
+});
+
+it('shows the evidence repair when the recorded readiness score is unavailable', () => {
+  renderEvidence({siteId: 'NRO-W-1872', tab: 'action'});
+  const action = within(screen.getByRole('region', {name: 'Blockers and action'}));
+  expect(action.getByText('No verified ranked blocker. A current readiness score is unavailable.')).toBeVisible();
+  expect(action.getByRole('list', {name: 'Ranked prerequisites'})).toHaveTextContent('Evidence repair · Transmission');
+});
+
+it.each([
+  ['NRO-W-1810', 'Fruitvale is on air.', 'This site is closed.'],
+  ['NRO-W-1822', /Jack London is .+\. The crew has been dispatched\./, 'Crew already dispatched.'],
+])('presents the recorded lifecycle instead of open-site advice at %s', (siteId, heading, reason) => {
+  renderEvidence({person: PERSON.andre, siteId, tab: 'action'});
+  expect(screen.getByRole('heading', {level: 1})).toHaveTextContent(heading);
+  const action = within(screen.getByRole('region', {name: 'Blockers and action'}));
+  expect(action.getByText('This site is not awaiting a ranked intervention.')).toBeVisible();
+  expect(action.queryByRole('heading', {name: 'Assessment recommendation'})).not.toBeInTheDocument();
+  const dispatch = within(screen.getByRole('region', {name: 'Field execution'})).getByRole('button', {name: 'Dispatch crew'});
+  expect(dispatch).toBeDisabled();
+  expect(dispatch).toHaveAccessibleDescription(reason);
+});
+
+it('shows the evidence owner and masked contact without exposing the full number in the DOM', () => {
+  renderEvidence({person: PERSON.jordan});
+  const {name, phone} = DIRECTORY[PERSON.ruth];
+  const digits = phone.replace(/\D/g, '');
+  const matrix = screen.getByRole('region', {name: 'Evidence provenance'});
+  const power = within(screen.getByRole('row', {name: /^Power\b/}));
+  expect(power.getByText(name, {exact: true})).toBeVisible();
+  expect(power.getByText(`Phone ending in ${digits.slice(-4)}`, {exact: true})).toBeVisible();
+  expect(matrix.outerHTML).not.toContain(phone);
+  expect(matrix.outerHTML).not.toContain(digits);
+  expect(matrix.querySelector('a[href^="tel:"]')).toBeNull();
+});
+
+it('keeps the original Harbor Point score time in the Board row during an outage', async () => {
+  const store = createBrowserStore();
+  expect(store.bootstrap().ok).toBe(true);
+  expect(continueAs(store, PERSON.elena).ok).toBe(true);
+  const {faults} = store.getSnapshot();
+  expect(store.commit({commandId: 'board-outage'}, {writes: {
+    faults: {...faults, rev: faults.rev + 1, assessmentDown: true},
+  }}).ok).toBe(true);
+  window.history.replaceState({}, '', '/board');
+  render(<App />);
+  const main = within(await screen.findByRole('main'));
+  const harbor = within(main.getByRole('row', {name: /Harbor Point/}));
+  const retained = harbor.getByRole('cell', {name: /^34%/});
+  expect(retained.querySelector('time')).toHaveAttribute('datetime', '2026-05-12T09:34:00');
+  expect(retained.querySelector('time').parentElement.textContent).toBe('Scored 12 May 2026, 09:34.');
+  expect(main.getByText(/^Evidence from DPAM/)).toHaveTextContent('Evidence from DPAM, POS, DDL, and ECO. Scored 12 May 2026, 09:34.');
+});
+
+it.each([
+  ['NRO-E-2101', 'Power', 'Utility handoff incomplete'],
+  ['NRO-E-2104', 'Civil', 'Civil works is monitored for the crew plan.'],
+  ['NRO-W-1878', 'Civil', 'Civil · in progress. Civil works is monitored for the crew plan.'],
+])('shows only the applicable dependency at %s for %s', (siteId, row, dependency) => {
+  renderEvidence({siteId});
+  const evidenceRow = within(screen.getByRole('row', {name: new RegExp(`^${row}\\b`)}));
+  expect(evidenceRow.getByRole('cell', {name: dependency, exact: true})).toBeVisible();
+  expect(evidenceRow.queryByRole('cell', {name: /Northwind window|Blocks the .* crew/})).not.toBeInTheDocument();
+});
 
 it('keeps the drawer open on rejection, then saves a correction and restores focus', async () => {
   const user = userEvent.setup();
@@ -210,7 +448,7 @@ it('opens the retained evidence and keeps the Harbor Point crew gated for the di
   const user = userEvent.setup();
   renderEvidence({person: PERSON.andre, tab: 'prediction'});
   expect(screen.getByRole('heading', {level: 1})).toHaveTextContent('Harbor Point is Critical. Hold the 18 May crew. Power is not ready.');
-  expect(screen.getByRole('link', {name: 'Back to Board'})).toHaveAttribute('href', '/board');
+  expect(within(screen.getByRole('main')).getByRole('link', {name: 'Board', exact: true})).toHaveAttribute('href', '/board');
   expect(screen.getByText('Chance ready on 18 May 2026.')).toBeVisible();
   expect(screen.getByText('Assessment horizon: 6 days')).toBeVisible();
   expect(screen.getByText('Evidence is complete enough to rank the blocker. It is not enough to dispatch through a failed prerequisite.')).toBeVisible();
@@ -240,7 +478,7 @@ it('opens the retained evidence and keeps the Harbor Point crew gated for the di
 it.each([PERSON.elena, PERSON.priya, PERSON.samira])('offers assessment to authorized persona %s on a healthy scoped site', person => {
   renderEvidence({person, siteId: 'NRO-E-2104', tab: 'prediction'});
   expect(screen.getByRole('heading', {level: 1})).toHaveTextContent('Willow Span is Good. Check the crew plan before dispatch.');
-  expect(screen.getByRole('link', {name: 'Back to Board'})).toHaveAttribute('href', '/board?program=east-bay');
+  expect(within(screen.getByRole('main')).getByRole('link', {name: 'Board', exact: true})).toHaveAttribute('href', '/board?program=east-bay');
   expect(screen.getByText('89%', {exact: true})).toBeVisible();
   expect(screen.getByRole('button', {name: 'Run assessment'})).toBeEnabled();
 });

@@ -70,8 +70,9 @@ test('East Bay decisions are scoped, and a Marsh Junction approval links to its 
   await fromWorkspace(page, 'NRO-E-2102', 'Approval');
   await expect(page.locator('#site-plan')).toContainText('22 May 2026');
   await page.getByRole('tab', {name: /^Audit/}).click();
-  const event = page.getByRole('region', {name: 'Audit'}).locator('ol > li').filter({hasText: /^Approval ·/});
-  await event.locator('summary').click();
+  const summary = page.locator('summary').filter({hasText: /^Approval · 12 May 2026 09:40 · Priya Raman$/});
+  const event = page.getByRole('region', {name: 'Audit', exact: true}).locator('ol > li > details').filter({has: summary});
+  await event.locator(':scope > summary').click();
   for (const value of ['ECO-2102-1', 'snap_NRO-E-2102_seed', 'nro-readiness-sim 1.4.2', 'Approved — resequence',
     `Rationale: ${rationale}`, 'Priya Raman', '12 May 2026 09:40']) {
     await expect(event.getByText(value, {exact: true})).toBeVisible();
@@ -82,6 +83,63 @@ test('East Bay decisions are scoped, and a Marsh Junction approval links to its 
   await expect(page).toHaveURL('/approvals');
   await expect(page.getByRole('region', {name: 'Portside'})).toBeVisible();
   await expect(marsh).toHaveCount(0);
+});
+
+test('Priya can approve the acknowledged 59% Portside plan change, but Andre cannot dispatch below 60%', async ({page}) => {
+  await enter(page, 'Priya Raman');
+  // No released low-confidence site has an actionable approval payload; seed only the score fixture.
+  await page.evaluate(() => {
+    const key = 'nro.demo.sites';
+    const sites = JSON.parse(localStorage.getItem(key));
+    sites.value['NRO-W-1866'].assessment.confidence = 59;
+    localStorage.setItem(key, JSON.stringify(sites));
+  });
+  await page.reload();
+  await fromPortfolio(page, 'Portside', 'NRO-W-1866', 'Approval');
+  const approval = page.getByRole('region', {name: 'Approval', exact: true});
+  const acknowledgement = approval.getByRole('checkbox', {name: 'I reviewed the evidence and the 59% confidence.', exact: true});
+  const approve = approval.getByRole('button', {name: 'Approve', exact: true});
+  const plan = page.locator('#site-plan');
+  const audit = page.getByRole('tab', {name: /^Audit/});
+  const before = await audit.textContent();
+  const rationale = 'Move the pad only after reviewing the supplier evidence and confidence.';
+  await approval.getByLabel('Why is this the right call for the cluster?').fill(rationale);
+  await expect(acknowledgement).not.toBeChecked();
+  await approve.click();
+  await expect(approval.getByRole('alert')).toHaveText('Confirm that you reviewed the evidence and confidence.');
+  await expect(approval.getByRole('article')).toHaveCount(0);
+  await expect(plan).toContainText('Northwind Power · AGR-NW-2291');
+  await expect(plan).toContainText('15 May 2026');
+  await expect(audit).toHaveText(before);
+  await acknowledgement.check();
+  await approve.click();
+  const decision = approval.getByRole('article');
+  await expect(decision.getByRole('heading', {name: 'Approved — resequence', exact: true})).toBeVisible();
+  await expect(decision.getByText(rationale, {exact: true})).toBeVisible();
+  await expect(plan).toContainText('Civic Civil · AGR-CC-1844');
+  await expect(plan).toContainText('19 May 2026');
+
+  await handoff(page, 'Priya Raman Program Manager', 'Andre Cole · Field Dispatcher');
+  await fromPortfolio(page, 'Portside', 'NRO-W-1866', ACTION);
+  await expect(plan).toContainText('Civic Civil · AGR-CC-1844');
+  await expect(plan).toContainText('19 May 2026');
+  const field = page.getByRole('region', {name: 'Field execution', exact: true});
+  await expect(field).toContainText('15 May 2026 07:00');
+  await expect(field.getByText('Crew status: Blocked pending Priya', {exact: true})).toBeVisible();
+  await expect(field).not.toContainText('Dispatch approved by');
+  const dispatch = field.getByRole('button', {name: 'Dispatch crew', exact: true});
+  const floorDenial = 'Confidence is 59%. Dispatch requires at least 60% confidence.';
+  await expect(dispatch).toBeDisabled();
+  await expect(dispatch).toHaveAccessibleDescription(floorDenial);
+  await expect(field.getByText(floorDenial, {exact: true})).toBeVisible();
+  await expect(page.getByRole('dialog', {name: 'Confirm dispatch crew', exact: true})).toHaveCount(0);
+
+  await audit.click();
+  const events = page.getByRole('region', {name: 'Audit', exact: true}).locator('ol > li > details > summary');
+  await expect(events.filter({hasText: /^Approval · .* · Priya Raman$/})).toHaveCount(1);
+  await expect(events.filter({hasText: /^(?:Dispatched|Disposition) · .* · Andre Cole$/})).toHaveCount(0);
+  // Executions are separate from the approval history and are not directly exposed by the UI.
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('nro.demo.sites')).value['NRO-W-1866'].executions)).toEqual([]);
 });
 
 test('a Viewer sees disabled decision controls beside the East Bay request', async ({page}) => {
@@ -95,6 +153,66 @@ test('a Viewer sees disabled decision controls beside the East Bay request', asy
   }
 });
 
+for (const action of ['Reject', 'Modify']) {
+  test(`East Bay queue ${action.toLowerCase()} persists only on Marsh Junction`, async ({page}) => {
+    await enter(page, 'Priya Raman', 'East Bay Cluster 2');
+    const nav = page.getByRole('navigation', {name: 'Program', exact: true});
+    const queue = nav.getByRole('link', {name: 'Approvals', exact: true});
+    const plan = page.locator('#site-plan');
+    await fromPortfolio(page, 'Delta Landing', 'NRO-E-2101', 'Audit (0)');
+    await expect(plan).toContainText('Northwind Power · AGR-NW-2291');
+    await expect(plan).toContainText('18 May 2026');
+    await queue.click();
+    await expect(page).toHaveURL('/approvals?program=east-bay');
+    const marsh = page.getByRole('region', {name: 'Marsh Junction', exact: true});
+    const rationale = `East Bay ${action.toLowerCase()}: leave the supplier and date unchanged until the review closes.`;
+    const note = 'Confirm the Marsh Junction civil handoff.';
+    await expect(marsh.getByRole('link', {name: 'Open Marsh Junction approval', exact: true})).toBeVisible();
+    await marsh.getByLabel('Why is this the right call for the cluster?').fill(rationale);
+    await marsh.getByRole('button', {name: action, exact: true}).click();
+    if (action === 'Modify') {
+      await marsh.getByLabel('Owner', {exact: true}).selectOption({label: 'Ruth Ibarra'});
+      await marsh.getByLabel('Due date').fill('2026-05-14');
+      await marsh.getByLabel('Short note').fill(note);
+      await marsh.getByRole('button', {name: 'Save modification', exact: true}).click();
+    }
+    await expect(page.getByText('No records for this program.', {exact: true})).toBeVisible();
+
+    await fromWorkspace(page, 'NRO-E-2102', 'Approval');
+    await page.reload();
+    await expect(page).toHaveURL('/sites/NRO-E-2102?tab=approval');
+    await expect(plan).toContainText('Civic Civil · AGR-CC-1844');
+    await expect(plan).toContainText('19 May 2026');
+    const approval = page.getByRole('region', {name: 'Approval', exact: true});
+    const record = approval.getByRole('article');
+    await expect(record.getByRole('heading', {name: action === 'Reject' ? 'Rejected by Priya Raman' : 'Modified', exact: true})).toBeVisible();
+    await expect(record.getByText(rationale, {exact: true})).toBeVisible();
+    if (action === 'Modify') await expect(record.getByText(`Ruth Ibarra · 14 May 2026 · ${note}`, {exact: true})).toBeVisible();
+    await expect(record).not.toContainText('ECO-');
+    await page.getByRole('tab', {name: /^Audit/}).click();
+    const audit = page.getByRole('region', {name: 'Audit', exact: true});
+    const event = audit.getByText(`${action === 'Reject' ? 'Rejected' : 'Modified'} · 12 May 2026 09:40 · Priya Raman`, {exact: true});
+    await event.click();
+    await expect(audit.getByText(`Rationale: ${rationale}`, {exact: true})).toBeVisible();
+
+    await fromWorkspace(page, 'NRO-E-2101', 'Audit (0)');
+    await expect(plan).toContainText('Northwind Power · AGR-NW-2291');
+    await expect(plan).toContainText('18 May 2026');
+    await expect(audit).toContainText('No events are recorded for this site.');
+    const returnToBoard = page.getByRole('main').getByRole('link', {name: 'Board', exact: true});
+    await returnToBoard.click();
+    await expect(page).toHaveURL('/board?program=east-bay');
+    await queue.click();
+    await expect(page.getByText('No records for this program.', {exact: true})).toBeVisible();
+    await page.getByRole('combobox', {name: 'Active program'}).selectOption('west-metro');
+    await expect(page).toHaveURL('/approvals');
+    const portside = page.getByRole('region', {name: 'Portside', exact: true});
+    await expect(portside).toContainText('Approver: Priya Raman · Pending approval');
+    await expect(portside.getByLabel('Why is this the right call for the cluster?')).toHaveValue('');
+    await expect(marsh).toHaveCount(0);
+  });
+}
+
 test('Priya approves only the Portside supplier and date; Andre inherits the plan, not dispatch authority', async ({page}) => {
   await enter(page, 'Priya Raman');
   await fromPortfolio(page, 'Portside', 'NRO-W-1866', ACTION);
@@ -106,6 +224,8 @@ test('Priya approves only the Portside supplier and date; Andre inherits the pla
   await expect(approval).toContainText('Civic Civil');
   await expect(approval).toContainText('AGR-CC-1844');
   await expect(approval).toContainText('Commercial terms on file.');
+  await expect(approval).not.toContainText(/\bpric(?:e|ing)\b|[$€£]\s*\d|\b(?:USD|EUR|GBP)\s*\d|\d\s*(?:USD|EUR|GBP)\b/i);
+  await expect(approval).not.toContainText(/\bnro\.demo\./i);
   await approval.getByRole('button', {name: 'Approve', exact: true}).click();
   await expect(approval.getByRole('alert')).toContainText('at least 12 characters');
   await approval.getByLabel('Why is this the right call for the cluster?').fill('Civic Civil can take the pad in the confirmed window.');
@@ -168,15 +288,29 @@ test('Andre sees held and unconfirmed crews and dispatches Civic Center only aft
   await expect(spareApproval.getByRole('button', {name: 'Approve', exact: true})).toBeDisabled();
 
   await fromWorkspace(page, 'NRO-W-1860', ACTION);
-  for (const name of ['Dispatch crew', 'Hold crew', 'Resequence']) {
-    await expect(field.getByRole('button', {name, exact: true})).toBeDisabled();
-    await expect(field.getByRole('button', {name, exact: true})).toHaveAccessibleDescription('Confidence is 48%. An approver has to review this site before dispatch.');
+  for (const [name, reason] of [
+    ['Dispatch crew', 'Confidence is 48%. Dispatch requires at least 60% confidence.'],
+    ['Hold crew', 'Confidence is 48%. An approver has to review this site before dispatch.'],
+    ['Resequence', 'Confidence is 48%. An approver has to review this site before dispatch.'],
+  ]) {
+    const control = field.getByRole('button', {name, exact: true});
+    await expect(control).toBeDisabled();
+    await expect(control).toHaveAccessibleDescription(reason);
   }
   await fromWorkspace(page, 'NRO-W-1891', ACTION);
   await expect(field).toContainText('Helen Cho');
   await expect(field).toContainText('26 May 2026 07:00');
   await expect(field.getByRole('button', {name: 'Hold crew'})).toHaveAttribute('aria-pressed', 'true');
   await expect(field).toContainText('Power is Not Ready after the 8 May failed visit.');
+  await fromWorkspace(page, 'NRO-W-1834', ACTION);
+  await expect(page.locator('#site-plan')).toContainText('86% · 81% (High)');
+  await expect(field).toContainText('14 May 2026 07:00');
+  await expect(field).toContainText('Planned, ready for dispatch');
+  await expect(field).not.toContainText('Dispatch approved by');
+  const rockridgeDispatch = field.getByRole('button', {name: 'Dispatch crew', exact: true});
+  await expect(rockridgeDispatch).toBeDisabled();
+  await expect(rockridgeDispatch).toHaveAccessibleDescription('No dispatch-specific approval matches this crew and plan.');
+
   await fromWorkspace(page, 'NRO-W-1847', ACTION);
   await expect(page.locator('#site-plan')).toContainText('92% · 90% (High)');
   const auditTab = page.getByRole('tab', {name: /^Audit/});

@@ -6,6 +6,7 @@ import {afterAll, afterEach, beforeAll, beforeEach, expect, it, vi} from 'vitest
 import App from '../src/App.jsx';
 import {BOARD_KEYS, makeBaseline} from '../src/data/baseline.js';
 import {PERSON} from '../src/data/people.js';
+import {DEFAULT_PROGRAM} from '../src/data/programs.js';
 import {siteFence} from '../src/services/evidence.js';
 import {executeField, previewField} from '../src/services/decisions.js';
 import {continueAs, readAccess, switchUser} from '../src/utils/access.js';
@@ -88,7 +89,7 @@ it('shows committed source changes, distinguishes manual and scenario outages, a
   await user.click(screen.getByRole('link', {name: 'Board', exact: true}));
   const harbor = within(screen.getByRole('table', {name: 'Site readiness register'})).getByRole('link', {name: 'Harbor Point', exact: true});
   expect(within(harbor.closest('tr')).getByText('34%')).toBeVisible();
-  expect(within(harbor.closest('tr')).getByText('12 May 2026 09:34')).toHaveAttribute('datetime', '2026-05-12T09:34:00');
+  expect(within(harbor.closest('tr')).getByText('12 May 2026, 09:34')).toHaveAttribute('datetime', '2026-05-12T09:34:00');
   await user.click(screen.getByRole('link', {name: 'Service health'}));
 
   await user.selectOptions(scenarioControl(), 'C');
@@ -177,12 +178,21 @@ it('keeps a failed confirmation open, then restores the morning board after a su
   expect(rawStorage()).toEqual(expected);
 });
 
-it('hides Health on an interrupted restore and rolls the journal forward on reload', async () => {
+it.each(['sites', 'program.north-valley.program'])('rolls all programs forward after a restore write fails at %s', async deniedKey => {
+  const programs = [DEFAULT_PROGRAM, 'east-bay', 'north-valley', 'south-shore'];
+  const stores = programs.map(id => createBrowserStore(id));
+  for (const store of stores) expect(store.bootstrap().ok).toBe(true);
+  const morning = rawStorage();
+  for (const [index, store] of stores.entries()) {
+    const thresholds = {...DEFAULT_THRESHOLDS, goodProbability: 90 + index};
+    expect(store.saveThresholds(thresholds, 'change-before-restore').ok).toBe(true);
+    expect(store.getSnapshot().program.thresholds).toEqual(thresholds);
+  }
   const user = userEvent.setup();
   const app = render(<App />);
   await user.selectOptions(scenarioControl(), 'D');
   await user.click(restoreOpener());
-  const deny = denyWrite('sites');
+  const deny = denyWrite(deniedKey);
   const dialog = restoreDialog();
   await user.click(within(dialog).getByRole('button', {name: restoreTitle}));
 
@@ -190,7 +200,14 @@ it('hides Health on an interrupted restore and rolls the journal forward on relo
   expect(screen.queryByRole('heading', {name: 'Service health'})).not.toBeInTheDocument();
   expect(within(dialog).getByRole('alert')).toHaveTextContent(/Board unavailable/);
   expect(screen.queryByText('Morning snapshot restored')).not.toBeInTheDocument();
-  expect(JSON.parse(localStorage.getItem(rawKey('pendingCommit')))).toMatchObject({mode: 'restore', targetGeneration: 1});
+  expect(JSON.parse(localStorage.getItem(rawKey('pendingCommit')))).toMatchObject({mode: 'restore', targetGeneration: 1,
+    targets: {'east-bay': 1, 'north-valley': 1, 'south-shore': 1}});
+  if (deniedKey === 'program.north-valley.program') {
+    expect(stored('program.east-bay.program').thresholds).toBeUndefined();
+    expect(stored('program.north-valley.program').thresholds.goodProbability).toBe(92);
+    expect(stored('program.south-shore.program').thresholds.goodProbability).toBe(93);
+    expect(createBrowserStore('south-shore').bootstrap()).toMatchObject({ok: false, error: {code: 'RECOVERY_REQUIRED'}});
+  }
 
   app.unmount();
   deny.mockRestore();
@@ -198,9 +215,15 @@ it('hides Health on an interrupted restore and rolls the journal forward on relo
   expect(screen.getByRole('heading', {name: 'Service health'})).toBeVisible();
   expect(scenarioControl()).toHaveValue('A');
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-  expect(localStorage.getItem(rawKey('pendingCommit'))).toBeNull();
-  expect(stored('audit').generation).toBe(1);
-  expect(stored('session').userId).toBe(PERSON.samira);
+  expect(screen.getByRole('button', {name: /Samira Qureshi/})).toBeVisible();
+  for (const program of programs) {
+    const auditKey = rawKey(program === DEFAULT_PROGRAM ? 'audit' : `program.${program}.audit`);
+    const audit = JSON.parse(morning[auditKey]);
+    audit.value.generation = 1;
+    morning[auditKey] = JSON.stringify(audit);
+  }
+  // All seed records and the original users/session bytes must survive; no journal remains.
+  expect(rawStorage()).toEqual(morning);
 });
 
 it('leaves a corrupt journal untouched on Try again and replaces it only after explicit confirmation', async () => {
@@ -234,8 +257,79 @@ it('lets only the facilitator reach Health or write settings', async () => {
   expect(rawStorage()).toEqual(before);
   render(<App />);
   expect(await screen.findByRole('heading', {name: 'Programs', level: 1})).toBeVisible();
+  expect(screen.getByRole('status')).toHaveTextContent('Service health is limited to the cluster administrator.');
   expect(window.location.pathname).toBe('/');
   expect(screen.queryByRole('link', {name: 'Service health'})).not.toBeInTheDocument();
+  expect(rawStorage()).toEqual(before);
+});
+
+it.each([
+  ['missing settings', null],
+  ...['goodProbability', 'goodConfidence', 'attentionFrom', 'dispatchBelow', 'freshness'].map(field => {
+    const settings = {...DEFAULT_THRESHOLDS};
+    delete settings[field];
+    return [`missing ${field}`, settings];
+  }),
+  ...['Permit', 'Civil', 'Power', 'Transmission', 'Material', 'Workforce'].map(field => {
+    const freshness = {...DEFAULT_THRESHOLDS.freshness};
+    delete freshness[field];
+    return [`missing ${field} freshness`, {...DEFAULT_THRESHOLDS, freshness}];
+  }),
+  ['negative percentage', {...DEFAULT_THRESHOLDS, dispatchBelow: -1}],
+  ['percentage above 100', {...DEFAULT_THRESHOLDS, goodProbability: 101}],
+  ['fractional percentage', {...DEFAULT_THRESHOLDS, goodConfidence: 75.5}],
+  ['numeric string percentage', {...DEFAULT_THRESHOLDS, attentionFrom: '50'}],
+  ['non-finite percentage', {...DEFAULT_THRESHOLDS, dispatchBelow: Infinity}],
+  ['attention above Good probability only', {...DEFAULT_THRESHOLDS, goodProbability: 49}],
+  ['attention above Good confidence only', {...DEFAULT_THRESHOLDS, goodConfidence: 49}],
+  ['negative freshness', {...DEFAULT_THRESHOLDS, freshness: {...DEFAULT_THRESHOLDS.freshness, Permit: -1}}],
+  ['fractional freshness', {...DEFAULT_THRESHOLDS, freshness: {...DEFAULT_THRESHOLDS.freshness, Civil: 0.5}}],
+  ['numeric string freshness', {...DEFAULT_THRESHOLDS, freshness: {...DEFAULT_THRESHOLDS.freshness, Power: '7'}}],
+  ['unsafe freshness integer', {...DEFAULT_THRESHOLDS, freshness: {...DEFAULT_THRESHOLDS.freshness, Workforce: Number.MAX_SAFE_INTEGER + 1}}],
+])('rejects %s without changing the persisted or published board', (_case, settings) => {
+  const store = createBrowserStore();
+  expect(store.bootstrap().ok).toBe(true);
+  const before = rawStorage();
+  const snapshot = store.getSnapshot();
+
+  expect(store.saveThresholds(settings, 'invalid-thresholds')).toMatchObject({ok: false, error: {code: 'BAD_INPUT'}});
+  expect(store.getSnapshot()).toBe(snapshot);
+  expect(rawStorage()).toEqual(before);
+});
+
+it.each([
+  [0, 0],
+  [100, Number.MAX_SAFE_INTEGER],
+])('persists percentage boundary %i and freshness boundary %i without changing other records', (percent, days) => {
+  const store = createBrowserStore();
+  expect(store.bootstrap().ok).toBe(true);
+  const before = rawStorage();
+  const program = stored('program');
+  const thresholds = {goodProbability: percent, goodConfidence: percent, attentionFrom: percent, dispatchBelow: percent,
+    freshness: {...DEFAULT_THRESHOLDS.freshness, Permit: days}};
+
+  expect(store.saveThresholds(thresholds, 'boundary-thresholds').ok).toBe(true);
+  expect(createBrowserStore().bootstrap().data.program.thresholds).toEqual(thresholds);
+  expect(rawStorage()).toEqual({...before,
+    [rawKey('program')]: JSON.stringify({schemaVersion: 1, value: {...program, thresholds}})});
+});
+
+it('explains an invalid threshold relationship to the facilitator and retains committed settings', async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  const before = rawStorage();
+  const minimum = screen.getByRole('spinbutton', {name: 'Needs Attention minimum (%)'});
+  await user.clear(minimum);
+  await user.type(minimum, '76');
+  expect(minimum).toBeValid();
+  await user.click(screen.getByRole('button', {name: 'Save thresholds'}));
+
+  expect(screen.getByText('Use whole numbers and keep the Needs Attention minimum at or below both Good thresholds.')).toBeVisible();
+  expect(screen.queryByText('Thresholds saved. No new assessment was run.')).not.toBeInTheDocument();
+  expect(rawStorage()).toEqual(before);
+  await user.click(screen.getByRole('link', {name: 'Board', exact: true}));
+  await user.click(screen.getByRole('link', {name: 'Service health'}));
+  expect(screen.getByRole('spinbutton', {name: 'Needs Attention minimum (%)'})).toHaveValue(50);
 });
 
 it('relabels a scored site without modifying its score and restores settings across programs', async () => {

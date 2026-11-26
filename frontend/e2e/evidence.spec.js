@@ -86,6 +86,12 @@ test('Operator replays Harbor Point, follows a factor, attaches a document and r
   await expect(table.getByText('rejected.txt')).toHaveCount(0);
   await addedPdf.getByText('harbor-point-power-note.pdf', {exact: true}).click();
   await expect(addedPdf.getByText(POWER_TEXT, {exact: true})).toBeVisible();
+
+  const main = page.getByRole('main');
+  await expect(page.getByRole('navigation', {name: 'Program'}).getByRole('link', {name: 'Board', exact: true})).toHaveAttribute('aria-current', 'location');
+  await main.getByRole('link', {name: 'Board', exact: true}).click();
+  await expect(main.getByText('Harbor Point is on hold. Power evidence shows Ready.', {exact: true})).toBeVisible();
+  await expect(main.getByText('Harbor Point is on hold. Power is not ready.', {exact: true})).toHaveCount(0);
 });
 
 test('Viewer sees both disputed sources and missing evidence but cannot edit or score', async ({page}) => {
@@ -103,7 +109,7 @@ test('Viewer sees both disputed sources and missing evidence but cannot edit or 
   await expect(update).toHaveAccessibleDescription('Only Operators can update evidence.');
   await page.keyboard.press('Enter');
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  await page.getByRole('link', {name: 'Back to Board'}).click();
+  await page.getByRole('main').getByRole('link', {name: 'Board', exact: true}).click();
   await register.getByRole('link', {name: 'East Yard', exact: true}).click();
   const evidence = page.getByRole('tab', {name: 'Evidence'});
   const prediction = page.getByRole('tab', {name: 'Prediction'});
@@ -144,7 +150,7 @@ test('Dispatcher sees the Harbor Point hold and can inspect a healthy site witho
   await expect(dispatch).toHaveAccessibleDescription('Power is Not Ready and the site is on hold.');
   await expect(page.getByRole('button', {name: 'Hold crew'})).toBeVisible();
   await expect(page.getByRole('button', {name: 'Resequence', exact: true})).toBeDisabled();
-  await page.getByRole('link', {name: 'Back to Board'}).click();
+  await page.getByRole('main').getByRole('link', {name: 'Board', exact: true}).click();
   await page.getByRole('table', {name: 'Site readiness register'}).getByRole('link', {name: 'Rockridge', exact: true}).click();
   await expect(page.getByRole('heading', {level: 1})).toHaveText('Rockridge is Good. Check the crew plan before dispatch.');
   await page.getByRole('tab', {name: 'Prediction'}).click();

@@ -46,6 +46,7 @@ export default function SiteWorkspace({board, site, actor, store, notify}) {
   const onAir = site.lifecycle === 'on_air';
   const scoreLabel = !current && !onAir ? 'Last probability (historical)' : 'Probability';
   const probability = onAir ? '—' : lastScore?.probability == null ? 'Unavailable' : `${lastScore.probability}%`;
+  const scoreConfidence = lastScore ? `${lastScore.confidence}% (${confidenceBand(lastScore.confidence)})` : '—';
   const supplier = SUPPLIERS[site.plan.supplierId];
   const notes = [...site.notes].reverse().sort((a, b) => b.at.localeCompare(a.at));
   const auditCount = board.audit.events.filter(event => event.siteId === site.id).length;
@@ -77,7 +78,7 @@ export default function SiteWorkspace({board, site, actor, store, notify}) {
 
   return (
     <div className="space-y-3" ref={frame}>
-      <Link to={programPath('/board', siteProgram(site.id))} className="btn">Back to Board</Link>
+      <Link to={programPath('/board', siteProgram(site.id))} className="btn">Board</Link>
       <header className="card space-y-4 p-5">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
@@ -101,15 +102,24 @@ export default function SiteWorkspace({board, site, actor, store, notify}) {
           </div>
           <div>
             <dt className="meta">Assessment · {scoreLabel} · Confidence</dt>
-            <dd className="font-medium">{probability} · {lastScore ? `${lastScore.confidence}% (${confidenceBand(lastScore.confidence)})` : '—'}</dd>
-            {lastScore && confidence !== lastScore.confidence && <dd className="meta">Working confidence: {confidence}%</dd>}
+            <dd className="font-medium">{probability} · {scoreConfidence}</dd>
+            {lastScore && confidence !== lastScore.confidence && (
+              <dd className="meta">Working confidence: {confidence}%</dd>
+            )}
           </div>
           <div>
             <dt className="meta">Disposition · Next owner</dt>
             <dd className="font-medium">{disposition} · {personName(board, site.ownerId)}</dd>
           </div>
         </dl>
-        {lastScore && <p className="meta">Scored <time dateTime={lastScore.scoredAt}>{formatDate(lastScore.scoredAt)}, {lastScore.scoredAt.slice(11, 16)}</time>.</p>}
+        {lastScore && (
+          <p className="meta">
+            Scored{' '}
+            <time dateTime={lastScore.scoredAt}>
+              {formatDate(lastScore.scoredAt)}, {lastScore.scoredAt.slice(11, 16)}
+            </time>.
+          </p>
+        )}
       </header>
       {!!notes.length && (
         <section className="card p-4" aria-label="Site notes">
@@ -126,9 +136,12 @@ export default function SiteWorkspace({board, site, actor, store, notify}) {
       )}
       <div role="tablist" aria-label="Site workspace" className="flex flex-wrap border-b border-line bg-card">
         {TABS.map(([key, label]) => (
-          <button key={key} type="button" role="tab" id={`tab-${key}`} aria-controls="workspace-pane" aria-selected={key === tab}
-            tabIndex={key === tab ? 0 : -1} onKeyDown={moveTab} onClick={() => navigate(`${sitePath(site.id)}?tab=${key}`)}
-            className="site-tab border-b-2 border-transparent px-3 py-3 font-medium text-muted hover:bg-surface">
+          <button
+            key={key} type="button" role="tab" id={`tab-${key}`}
+            aria-controls="workspace-pane" aria-selected={key === tab} tabIndex={key === tab ? 0 : -1}
+            onKeyDown={moveTab} onClick={() => navigate(`${sitePath(site.id)}?tab=${key}`)}
+            className="site-tab border-b-2 border-transparent px-3 py-3 font-medium text-muted hover:bg-surface"
+          >
             {label}{key === 'audit' ? ` (${auditCount})` : ''}
           </button>
         ))}
@@ -143,7 +156,11 @@ export default function SiteWorkspace({board, site, actor, store, notify}) {
           </div>
         )}
         {tab === 'approval' && (
-          <ApprovalPanel key={JSON.stringify([site.rev, board.faults.rev, crewRev, optionId])} {...props} optionId={optionId} />
+          <ApprovalPanel
+            key={JSON.stringify([site.rev, board.faults.rev, crewRev, optionId])}
+            {...props}
+            optionId={optionId}
+          />
         )}
         {tab === 'audit' && <AuditPanel {...props} />}
       </section>
