@@ -102,7 +102,7 @@ function BoardRoutes({accessStore, programId, validProgram}) {
 
   /** Open confirmation only for a valid persisted administrator session. */
   function openRestore(opener) {
-    const intent = store.getRestoreIntent();
+    const intent = accessStore.getRestoreIntent();
     if (!intent) { notify('error', 'Only the cluster administrator can restore the morning board.'); return; }
     restoreOpener.current = opener;
     setRestoreIntent(intent);
@@ -137,7 +137,7 @@ function BoardRoutes({accessStore, programId, validProgram}) {
             <p role="alert">{boot?.error?.message ?? 'Ask the cluster administrator to restore the morning board.'}</p>
             <div className="flex flex-wrap gap-2">
               <button type="button" className="btn" onClick={() => setBoot(store.recover())}>Try again</button>
-              {store.getRestoreIntent() && (
+              {accessStore.getRestoreIntent() && (
                 <button type="button" className="btn" onClick={event => openRestore(event.currentTarget)}>{RESTORE_TITLE}…</button>
               )}
             </div>
@@ -168,7 +168,8 @@ function BoardRoutes({accessStore, programId, validProgram}) {
           </Routes>}
         </SharedShell>
       )}
-      {restoreIntent && <RestoreDialog store={store} intent={restoreIntent} onDismiss={closeRestore} onRestored={() => {
+      {restoreIntent && <RestoreDialog store={accessStore} intent={restoreIntent} onDismiss={closeRestore} onRestored={() => {
+        if (store !== accessStore) setBoot(store.recover());
         setQuery('');
         notify('success', 'Morning snapshot restored');
       }} />}

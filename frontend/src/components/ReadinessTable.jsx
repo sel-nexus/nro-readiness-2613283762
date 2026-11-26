@@ -57,6 +57,7 @@ export function ReadinessTable({board, sites, sort, onSort, ownerPath}) {
                   </td>
                   <td className="px-3 py-2 font-semibold">
                     {lifecycle === 'on_air' ? '—' : assessment?.probability == null ? 'Unavailable' : `${assessment.probability}%`}
+                    {site.retainedOutage && <span className="meta block font-normal">Last scored <time dateTime={assessment.scoredAt}>{formatDate(assessment.scoredAt, true)}</time></span>}
                   </td>
                   <td className="px-3 py-2">{assessment?.confidence == null ? '—' : `${assessment.confidence}%`}</td>
                   <td className="px-3 py-2">

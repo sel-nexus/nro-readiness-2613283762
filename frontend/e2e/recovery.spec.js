@@ -15,8 +15,9 @@ test.afterEach(async ({page}) => {
 test('Samira runs during the outage, keeps the score, then retries twice offline without clearing DDL', async ({page, context}) => {
   await page.goto('/');
   await page.getByRole('button', {name: 'Continue as Samira Qureshi'}).click();
-  const portfolioFocus = page.getByRole('region', {name: 'Workshop focus'});
-  await expect(portfolioFocus.getByRole('link', {name: 'Civic Center dispatch'})).toBeVisible();
+  await expect(page.getByRole('heading', {name: 'Programs', level: 1})).toBeVisible();
+  await page.getByRole('link', {name: 'Open West Metro Cluster 4'}).click();
+  await expect(page.getByRole('table', {name: 'Site readiness register'}).getByRole('link', {name: 'Civic Center', exact: true})).toBeVisible();
   await page.getByRole('link', {name: 'Service health'}).click();
   await expect(page).toHaveURL('/service-health');
   const sources = page.getByRole('list', {name: 'Local sources'});
@@ -41,6 +42,7 @@ test('Samira runs during the outage, keeps the score, then retries twice offline
   await expect(assessmentStatus).toHaveText('Up');
   await page.getByLabel('Workshop scenario').selectOption({label: 'Service interruption'});
   const snapshot = page.getByRole('region', {name: 'Snapshot'});
+  await expect(snapshot).toContainText('700 ms (simulated)');
   await expect(snapshot).toContainText('Showing the score from 12 May 2026 09:34');
   await expect(assessmentStatus).toHaveText('Down');
   await expect(assessmentSwitch).toHaveAttribute('aria-checked', 'false');
@@ -111,7 +113,7 @@ test('Samira runs during the outage, keeps the score, then retries twice offline
   await expect(history.getByText('Scored · 12 May 2026 09:40 · nro-readiness-sim 1.4.2', {exact: true})).toHaveCount(1);
   await expect(history.getByText('Scored · 12 May 2026 09:34 · nro-readiness-sim 1.4.2', {exact: true})).toHaveCount(1);
   await expect(page.getByRole('button', {name: 'DDL · Down · synced 09:22'})).toBeVisible();
-  await page.getByRole('link', {name: 'Back to Portfolio', exact: true}).click();
+  await page.getByRole('link', {name: 'Back to Board', exact: true}).click();
   await page.getByRole('link', {name: 'Service health'}).click();
   await expect(page).toHaveURL('/service-health');
   await expect(snapshot.locator('time')).toHaveText('12 May 2026 09:40');
@@ -128,10 +130,10 @@ test('scenario selection highlights exceptions and opens Portside without granti
   await page.getByRole('link', {name: 'Service health'}).click();
   const scenario = page.getByLabel('Workshop scenario');
   await scenario.selectOption({label: 'Exception'});
-  await page.getByRole('link', {name: 'Portfolio', exact: true}).click();
-  const focus = page.getByRole('region', {name: 'Workshop focus'});
-  for (const name of ['Lakeside stale permit', 'Market DAS material conflict', 'Hillcrest low confidence', 'Harbor Point power blocker']) {
-    await expect(focus.getByRole('link', {name})).toBeVisible();
+  await page.getByRole('link', {name: 'Board', exact: true}).click();
+  const register = page.getByRole('table', {name: 'Site readiness register'});
+  for (const [name, detail] of [['Lakeside', 'Permit · stale'], ['Market DAS', 'Material · conflict'], ['Hillcrest', '48%'], ['Harbor Point', 'Power · Not Ready']]) {
+    await expect(register.getByRole('row').filter({has: register.getByRole('link', {name, exact: true})})).toContainText(detail);
   }
   await page.getByRole('link', {name: 'Service health'}).click();
   await scenario.selectOption({label: 'Consequential decision'});
@@ -160,6 +162,7 @@ for (const entry of ['Service health', 'account menu']) {
   test(`${entry} restore preserves edited evidence and uploads on Cancel and removes them on confirmation`, async ({page}) => {
     await page.goto('/');
     await page.getByRole('button', {name: 'Continue as Elena Voss'}).click();
+    await page.getByRole('link', {name: 'Open West Metro Cluster 4'}).click();
     const harbor = page.getByRole('table', {name: 'Site readiness register'}).getByRole('link', {name: 'Harbor Point', exact: true});
     await harbor.click();
     const evidence = page.getByRole('table', {name: 'Evidence matrix'});
@@ -186,8 +189,8 @@ for (const entry of ['Service health', 'account menu']) {
     const account = page.getByRole('button', {name: /Samira Qureshi Cluster Administrator/});
     const health = page.getByRole('link', {name: 'Service health'});
     const scenario = page.getByLabel('Workshop scenario');
-    const portfolio = page.getByRole('link', {name: 'Portfolio', exact: true});
-    const back = page.getByRole('link', {name: 'Back to Portfolio', exact: true});
+    const portfolio = page.getByRole('link', {name: 'Board', exact: true});
+    const back = page.getByRole('link', {name: 'Back to Board', exact: true});
     const ddlDown = page.getByRole('button', {name: 'DDL · Down · synced 09:22'});
     await health.click();
     await scenario.selectOption({label: 'Service interruption'});
@@ -208,7 +211,7 @@ for (const entry of ['Service health', 'account menu']) {
 
     if (entry === 'account menu') await portfolio.click();
     await openRestore();
-    await expect(dialog).toHaveAccessibleDescription('Restores West Metro to the 09:40 record. Evidence edits and files added since then are removed.');
+    await expect(dialog).toHaveAccessibleDescription(/Restores all programs .* You stay signed in/);
     await expect(cancel).toBeFocused();
     if (entry === 'Service health') {
       await page.keyboard.press('Escape');
@@ -239,8 +242,9 @@ for (const entry of ['Service health', 'account menu']) {
       await expect(scenario.getByRole('option', {name: 'Normal', exact: true})).toHaveJSProperty('selected', true);
       await portfolio.click();
     }
-    await expect(page.getByRole('heading', {name: 'Normal workshop focus'})).toBeVisible();
+    await expect(page.getByRole('heading', {name: 'West Metro Cluster 4', level: 1})).toBeVisible();
     await harbor.click();
+    await expect(page.getByRole('heading', {name: 'Harbor Point is Critical. Hold the 18 May crew. Power is not ready.', level: 1})).toBeVisible();
     await expect(power.getByRole('cell', {name: 'Not Ready', exact: true})).toBeVisible();
     await expect(ready).toHaveCount(0);
     await expect(note).toHaveCount(0);
@@ -261,17 +265,56 @@ test('Samira restores a locked board and stays signed in', async ({page}) => {
   await page.getByRole('button', restoreOpener).click();
   await page.getByRole('dialog', restoreTitle).getByRole('button', restoreTitle).click();
   await expect(page.getByText('Morning snapshot restored', {exact: true})).toBeVisible();
-  await expect(page.getByRole('heading', {name: 'West Metro Cluster 4'})).toBeVisible();
+  await expect(page.getByRole('heading', {name: 'Programs', level: 1})).toBeVisible();
   await expect(account).toBeVisible();
 });
 
 test('a viewer cannot restore a locked board', async ({page}) => {
   await page.goto('/');
   await page.getByRole('button', {name: 'Continue as Jordan Ellis'}).click();
-  await expect(page.getByRole('heading', {name: 'West Metro Cluster 4'})).toBeVisible();
+  await expect(page.getByRole('heading', {name: 'Programs', level: 1})).toBeVisible();
   await expect(page.getByRole('link', {name: 'Service health'})).toHaveCount(0);
   await page.evaluate(() => localStorage.setItem('nro.demo.uploads', '{broken'));
   await page.reload();
   await expect(page.getByRole('heading', {name: 'Board unavailable'})).toBeVisible();
   await expect(page.getByRole('button', {name: /Restore morning snapshot/})).toHaveCount(0);
+});
+
+test('thresholds relabel the register and block approved dispatch without replacing the recorded score', async ({page}) => {
+  await page.goto('/');
+  await page.getByRole('button', {name: 'Continue as Samira Qureshi'}).click();
+  await page.getByRole('link', {name: 'Service health'}).click();
+  const field = page.getByRole('spinbutton', {name: 'Good probability (%)'});
+  const before = await page.evaluate(() => JSON.parse(localStorage.getItem('nro.demo.sites')).value['NRO-W-1847'].assessment);
+  await expect(field).toHaveValue('80');
+  const dispatchFloor = page.getByRole('spinbutton', {name: 'Dispatch minimum confidence (%)'});
+  await expect(dispatchFloor).toHaveValue('60');
+  await field.fill('95');
+  await dispatchFloor.fill('91');
+  await page.getByRole('button', {name: 'Save thresholds'}).click();
+  await expect(page.getByText('Thresholds saved. No new assessment was run.')).toBeVisible();
+  await page.getByRole('link', {name: 'Board', exact: true}).click();
+  const civic = page.getByRole('row').filter({has: page.getByRole('link', {name: 'Civic Center', exact: true})});
+  await expect(civic).toContainText('Needs Attention');
+  await expect(civic).toContainText('92%');
+  const after = await page.evaluate(() => JSON.parse(localStorage.getItem('nro.demo.sites')).value['NRO-W-1847'].assessment);
+  expect(after).toEqual(before);
+  await page.getByRole('button', {name: /Samira Qureshi Cluster Administrator/}).click();
+  await page.getByRole('button', {name: 'Switch user'}).click();
+  await page.getByRole('button', {name: /^Andre Cole ·/}).click();
+  await page.getByRole('link', {name: 'Open West Metro Cluster 4'}).click();
+  await civic.getByRole('link', {name: 'Civic Center'}).click();
+  const dispatch = page.getByRole('button', {name: 'Dispatch crew'});
+  await expect(dispatch).toBeDisabled();
+  await expect(dispatch).toHaveAccessibleDescription('Confidence is 90%. Dispatch requires at least 91% confidence.');
+});
+
+test('Priya is returned to Programs when she opens the Health URL directly', async ({page}) => {
+  await page.goto('/');
+  await page.getByRole('button', {name: 'Continue as Priya Raman'}).click();
+  await expect(page.getByRole('link', {name: 'Service health'})).toHaveCount(0);
+  await page.goto('/service-health');
+  await expect(page).toHaveURL('/');
+  await expect(page.getByRole('heading', {name: 'Programs', level: 1})).toBeVisible();
+  await expect(page.getByRole('link', {name: 'Service health'})).toHaveCount(0);
 });

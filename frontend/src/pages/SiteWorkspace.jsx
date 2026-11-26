@@ -41,7 +41,7 @@ export default function SiteWorkspace({board, site, actor, store, notify}) {
   const target = location.hash.slice(1);
   const optionId = typeof location.state?.optionId === 'string' ? location.state.optionId : null;
   const snapshot = board.audit.snapshots[site.assessment?.snapshotId];
-  const readiness = deriveReadiness(site, BOARD_AT, board.faults, snapshot);
+  const readiness = deriveReadiness(site, BOARD_AT, board.faults, snapshot, board.program.thresholds);
   const {lastScore, current, confidence, risk, disposition} = readiness;
   const onAir = site.lifecycle === 'on_air';
   const scoreLabel = !current && !onAir ? 'Last probability (historical)' : 'Probability';

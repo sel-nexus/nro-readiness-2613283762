@@ -26,18 +26,20 @@ function dependencyFor(site, row, quality, crew) {
 }
 
 /** Label source age using calendar days without rounding freshness decisions. */
-function freshnessLabel(row, clock) {
-  const threshold = FRESHNESS_DAYS[row.row];
+function freshnessLabel(row, clock, freshness) {
+  const threshold = freshness[row.row];
   if (!row.sourceAt) return `No age · ${threshold}-day threshold`;
   const age = (civilMillis(`${clock.slice(0, 10)}T00:00:00`) - civilMillis(`${row.sourceAt.slice(0, 10)}T00:00:00`)) / 86400000;
   return `${age} ${age === 1 ? 'day' : 'days'} · ${threshold}-day threshold`;
 }
 
 /** Describe only actionable defects without treating disputed readings as verified. */
-function problemCopy(site, key, quality) {
+function problemCopy(site, key, quality, freshness) {
   const row = site.rows[key];
   if (key === 'Power' && quality === 'Current' && row.status === 'Not Ready') return 'Power is Not Ready. This site cannot be shown as Ready.';
-  if (site.id === 'NRO-W-1851' && key === 'Permit' && quality === 'Stale') return 'Permit evidence is older than 14 days. Confidence has been reduced.';
+  if (site.id === 'NRO-W-1851' && key === 'Permit' && quality === 'Stale' && freshness.Permit === FRESHNESS_DAYS.Permit) {
+    return 'Permit evidence is older than 14 days. Confidence has been reduced.';
+  }
   if (site.id === 'NRO-W-1855' && key === 'Material' && quality === 'Conflicting') return 'DPAM and DDL disagree on material. Resolve with Omar Shah before relying on this score.';
   if (site.id === 'NRO-W-1872' && key === 'Transmission' && quality === 'Missing') return 'Transmission has no evidence. The probability is Unavailable.';
   return quality !== 'Current' ? `${key} evidence: ${quality}.` : null;
@@ -148,7 +150,7 @@ export function EvidenceMatrix({board, site, actor, store, readiness, notify, ta
     <section className="space-y-3" aria-label="Evidence provenance" ref={matrix}>
       {readiness.evidenceChanged && <p className="rounded-control border border-line bg-card p-3" role="status">{RESCORE_NOTICE}</p>}
       {ROW_ORDER.map(key => {
-        const copy = problemCopy(site, key, readiness.quality[key]);
+        const copy = problemCopy(site, key, readiness.quality[key], board.program.thresholds?.freshness ?? FRESHNESS_DAYS);
         return copy && <p key={key} className="rounded-control border border-line bg-amber-wash p-3 text-ink">{copy}</p>;
       })}
       {!editable && <p className="meta" id="evidence-update-reason">{reason}</p>}
@@ -200,7 +202,7 @@ export function EvidenceMatrix({board, site, actor, store, readiness, notify, ta
                     {rowDocs.some(doc => doc.extractionState === 'failed') && <p className="meta mt-2">{EXTRACTION_FAILED}</p>}
                   </td>
                   <td>{row.sourceAt ? formatDate(row.sourceAt, true) : 'No timestamp'}</td>
-                  <td>{freshnessLabel(row, clock)}</td>
+                  <td>{freshnessLabel(row, clock, board.program.thresholds?.freshness ?? FRESHNESS_DAYS)}</td>
                   <td>
                     <p>{personName(board, row.ownerId)}</p>
                     {phone && <a href={`tel:${phone.replace(/[^+\d]/g, '')}`}>{phone}</a>}

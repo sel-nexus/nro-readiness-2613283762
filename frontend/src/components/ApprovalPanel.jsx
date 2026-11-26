@@ -37,7 +37,7 @@ export function ApprovalQueue({board, actor, store, notify}) {
         </p>
         {pending.map(site => {
           const snapshot = board.audit.snapshots[site.assessment?.snapshotId];
-          const readiness = deriveReadiness(site, BOARD_AT, board.faults, snapshot);
+          const readiness = deriveReadiness(site, BOARD_AT, board.faults, snapshot, board.program.thresholds);
           const crewRev = board.program.crew.find(item => item.siteId === site.id)?.rev;
           return (
             <ApprovalDraftScope key={site.id}>

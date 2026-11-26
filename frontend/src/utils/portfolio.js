@@ -1,7 +1,7 @@
 /** Project portfolio triage and the unchanged program history from committed board records. */
 import {DIRECTORY} from '../data/people.js';
 import {BOARD_AT} from '../data/register.js';
-import {deriveReadiness} from './readiness.js';
+import {assessmentIsDown, deriveReadiness} from './readiness.js';
 
 export const FILTERS = Object.freeze(['All', 'Green', 'Amber', 'Red', 'Hold', 'Pending approval', 'Dispatched', 'On air', 'Data exception']);
 export const RISK_LABELS = Object.freeze({Green: 'Good', Amber: 'Needs Attention', Red: 'Critical'});
@@ -105,14 +105,17 @@ export function withOperationalParams(path, filters) {
 
 /** Keep full-board totals and recorded history separate from the filtered register. */
 export function selectPortfolio(board, {query = '', chip = 'All', sort, exception, owner} = {}) {
+  const interrupted = assessmentIsDown(board.faults);
   const sites = Object.fromEntries(Object.entries(board.sites).map(([id, site]) => {
-    const {risk, disposition, current, quality} = deriveReadiness(site, BOARD_AT, board.faults, board.audit.snapshots[site.assessment?.snapshotId]);
-    const assessment = site.lifecycle === 'open' && !current ? null : site.assessment;
+    const {risk, disposition, current, quality} = deriveReadiness(site, BOARD_AT, board.faults,
+      board.audit.snapshots[site.assessment?.snapshotId], board.program.thresholds);
+    const retainedOutage = site.lifecycle === 'open' && interrupted && Boolean(site.assessment);
+    const assessment = site.lifecycle === 'open' && !current && !retainedOutage ? null : site.assessment;
     const changedQuality = Object.keys(quality).filter(row => site.rows[row].quality !== quality[row]);
     const rows = changedQuality.length ? {...site.rows} : site.rows;
     for (const key of changedQuality) rows[key] = {...rows[key], quality: quality[key]};
-    return [id, risk === site.risk && disposition === site.disposition && assessment === site.assessment && rows === site.rows
-      ? site : {...site, risk, disposition, assessment, rows}];
+    return [id, !retainedOutage && risk === site.risk && disposition === site.disposition && assessment === site.assessment && rows === site.rows
+      ? site : {...site, risk, disposition, assessment, rows, retainedOutage}];
   }));
   const full = Object.values(sites);
   const risk = {Green: 0, Amber: 0, Red: 0};
