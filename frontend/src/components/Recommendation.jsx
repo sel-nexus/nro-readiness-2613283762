@@ -32,6 +32,7 @@ export function Recommendation({board, site, actor, store, readiness, notify}) {
   return (
     <section className="card space-y-4 p-4" aria-labelledby="ranked-heading">
       <h2 id="ranked-heading">Blockers and action</h2>
+      <p className="meta">The assessment recommends follow-up. Field execution uses the observed evidence and required approvals.</p>
       {!ranked.some(item => item.kind === 'blocker') && (
         <p>{!active ? 'This site is not awaiting a ranked intervention.' : ranked.some(item => item.kind !== 'watch')
           ? 'No verified ranked blocker. Review the follow-up below before proceeding.'
@@ -56,7 +57,7 @@ export function Recommendation({board, site, actor, store, readiness, notify}) {
       )}
       {active && proposal && (
         <div className="space-y-2">
-          <h3 className="font-semibold">Next-best action</h3>
+          <h3 className="font-semibold">Assessment recommendation</h3>
           <p className="font-medium">
             {newBlocker
               ? `Follow up on ${newBlocker.row}`
@@ -79,12 +80,12 @@ export function Recommendation({board, site, actor, store, readiness, notify}) {
             <ul className="space-y-2 pb-1">
               {proposal.payload?.kind === 'resequence' && (
                 <li>
-                  <Link className="font-medium text-teal-ink underline" to={path}>Review in Approval</Link>
+                  <Link className="btn" to={path}>Review in Approval</Link>
                 </li>
               )}
               {proposal.alternatives.map(item => (
                 <li key={item.id}>
-                  <Link className="font-medium text-teal-ink underline" to={path} state={{optionId: item.id}}>{item.label}</Link>
+                  <Link className="btn text-left" to={path} state={{optionId: item.id}}>{item.label}</Link>
                 </li>
               ))}
             </ul>

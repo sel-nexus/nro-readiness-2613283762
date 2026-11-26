@@ -8,6 +8,8 @@ import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import {EvidenceMatrix} from '../src/components/EvidenceMatrix.jsx';
 import {PredictionPanel} from '../src/components/PredictionPanel.jsx';
 import {PERSON} from '../src/data/people.js';
+import SiteWorkspace from '../src/pages/SiteWorkspace.jsx';
+import {siteProgram} from '../src/data/programs.js';
 import {continueAs, readAccess} from '../src/utils/access.js';
 import {deriveReadiness} from '../src/utils/readiness.js';
 import {createBrowserStore} from '../src/utils/storage.js';
@@ -37,16 +39,25 @@ afterEach(() => {
   }
 });
 
-function renderEvidence({person = PERSON.elena, siteId = HARBOR, prediction = false} = {}) {
-  const store = createBrowserStore();
-  expect(store.bootstrap().ok).toBe(true);
-  expect(continueAs(store, person).ok).toBe(true);
+function renderEvidence({person = PERSON.elena, siteId = HARBOR, prediction = false, tab, down = false} = {}) {
+  const accessStore = createBrowserStore();
+  expect(accessStore.bootstrap().ok).toBe(true);
+  expect(continueAs(accessStore, person).ok).toBe(true);
+  const store = siteProgram(siteId) === 'west-metro' ? accessStore : createBrowserStore(siteProgram(siteId));
+  if (store !== accessStore) expect(store.bootstrap().ok).toBe(true);
+  if (down) {
+    const {faults} = store.getSnapshot();
+    expect(store.commit({commandId: 'fixture-outage'}, {writes: {
+      faults: {...faults, rev: faults.rev + 1, assessmentDown: true, retryFailuresRemaining: 1},
+    }}).ok).toBe(true);
+  }
   const notify = vi.fn();
 
   function Panels() {
     const board = useSyncExternalStore(store.subscribe, store.getSnapshot);
     const site = board.sites[siteId];
     const props = {board, site, store, actor: readAccess(board), readiness: deriveReadiness(site, undefined, board.faults)};
+    if (tab) return <SiteWorkspace {...props} notify={notify} />;
     return (
       <>
         <EvidenceMatrix {...props} notify={notify} />
@@ -56,10 +67,11 @@ function renderEvidence({person = PERSON.elena, siteId = HARBOR, prediction = fa
   }
 
   render(
-    <MemoryRouter future={{v7_startTransition: true, v7_relativeSplatPath: true}}>
+    <MemoryRouter initialEntries={[`/sites/${siteId}${tab ? `?tab=${tab}` : ''}`]} future={{v7_startTransition: true, v7_relativeSplatPath: true}}>
       <Panels />
     </MemoryRouter>,
   );
+  return store;
 }
 
 it('keeps the drawer open on rejection, then saves a correction and restores focus', async () => {
@@ -174,7 +186,7 @@ it('shows replay progress, then retains the same score as historical after unsup
   renderEvidence({prediction: true});
   const prediction = within(screen.getByRole('region', {name: 'Assessment prediction'}));
   const run = prediction.getByRole('button', {name: 'Run assessment'});
-  expect(prediction.getByRole('link', {name: 'Power Not Ready'})).toHaveAttribute('href', '/sites/NRO-W-1842?tab=evidence#evidence-Power');
+  expect(prediction.getByRole('link', {name: 'View evidence: Power Not Ready'})).toHaveAttribute('href', '/sites/NRO-W-1842?tab=evidence#evidence-Power');
   fireEvent.click(run);
   expect(run).toBeDisabled();
   expect(prediction.getByRole('status')).toHaveTextContent('Scoring…');
@@ -192,4 +204,82 @@ it('shows replay progress, then retains the same score as historical after unsup
     .toHaveTextContent('No supported assessment matches these inputs. The last score is historical.'), {timeout: 2000});
   expect(prediction.getByText(replayed)).toBeVisible();
   expect(prediction.getByText('34%', {exact: true})).toBeVisible();
+});
+
+it('opens the retained evidence and keeps the Harbor Point crew gated for the dispatcher', async () => {
+  const user = userEvent.setup();
+  renderEvidence({person: PERSON.andre, tab: 'prediction'});
+  expect(screen.getByRole('heading', {level: 1})).toHaveTextContent('Harbor Point is Critical. Hold the 18 May crew. Power is not ready.');
+  expect(screen.getByRole('link', {name: 'Back to Board'})).toHaveAttribute('href', '/board');
+  expect(screen.getByText('Chance ready on 18 May 2026.')).toBeVisible();
+  expect(screen.getByText('Assessment horizon: 6 days')).toBeVisible();
+  expect(screen.getByText('Evidence is complete enough to rank the blocker. It is not enough to dispatch through a failed prerequisite.')).toBeVisible();
+  const factors = screen.getByRole('list', {name: 'Score factors'});
+  for (const [factor, points] of [['Power Not Ready', '+46'], ['Planned date inside 6 days', '+22'], ['Permit current', '−12'], ['Material on site', '−8']]) {
+    const link = within(factors).getByRole('link', {name: `View evidence: ${factor}`});
+    expect(link.closest('li')).toHaveTextContent(`${points} points`);
+  }
+  await user.click(within(factors).getByRole('link', {name: 'View evidence: Planned date inside 6 days'}));
+  expect(document.querySelector('#site-plan')).toHaveFocus();
+  await user.click(within(factors).getByRole('link', {name: 'View evidence: Power Not Ready'}));
+  expect(screen.getByRole('tabpanel', {name: 'Evidence'})).toBeVisible();
+  expect(screen.getByRole('columnheader', {name: 'Observed evidence status'})).toBeVisible();
+  const power = within(screen.getByRole('row', {name: /^Power\b/}));
+  const source = power.getByText('Northwind Power feed', {exact: true});
+  expect(source).toHaveFocus();
+  expect(source.closest('details')).toHaveAttribute('open');
+  expect(power.getByText('Depends on the Northwind window. Blocks the 18 May crew.')).toBeVisible();
+  await user.click(screen.getByRole('tab', {name: 'Blockers and action'}));
+  const dispatch = screen.getByRole('button', {name: 'Dispatch crew'});
+  expect(dispatch).toBeDisabled();
+  expect(dispatch).toHaveAccessibleDescription('Power is Not Ready and the site is on hold.');
+  expect(screen.getByRole('button', {name: 'Hold crew'})).toBeDisabled();
+  expect(screen.getByRole('button', {name: 'Resequence', exact: true})).toHaveAccessibleDescription('Approval is required for the date move.');
+});
+
+it.each([PERSON.elena, PERSON.priya, PERSON.samira])('offers assessment to authorized persona %s on a healthy scoped site', person => {
+  renderEvidence({person, siteId: 'NRO-E-2104', tab: 'prediction'});
+  expect(screen.getByRole('heading', {level: 1})).toHaveTextContent('Willow Span is Good. Check the crew plan before dispatch.');
+  expect(screen.getByRole('link', {name: 'Back to Board'})).toHaveAttribute('href', '/board?program=east-bay');
+  expect(screen.getByText('89%', {exact: true})).toBeVisible();
+  expect(screen.getByRole('button', {name: 'Run assessment'})).toBeEnabled();
+});
+
+it('replays a healthy East Bay fixture without replacing West Metro’s morning score', async () => {
+  const user = userEvent.setup();
+  const store = renderEvidence({siteId: 'NRO-E-2104', tab: 'prediction'});
+  const west = createBrowserStore();
+  expect(west.bootstrap().ok).toBe(true);
+  const morning = west.getSnapshot().sites[HARBOR].assessment;
+  await user.click(screen.getByRole('button', {name: 'Run assessment'}));
+  await screen.findByText('Assessment complete. Probability 89%.', {}, {timeout: 2000});
+  expect(store.getSnapshot().sites['NRO-E-2104'].assessment.scoredAt).toBe('2026-05-12T09:40:00');
+  expect(west.recover().data.sites[HARBOR].assessment).toEqual(morning);
+});
+
+it('keeps the exact morning result through failed run, failed retry and Keep last score, then refreshes on recovery', async () => {
+  const user = userEvent.setup();
+  const store = renderEvidence({tab: 'prediction', down: true});
+  const morning = store.getSnapshot().sites[HARBOR].assessment;
+  const outage = 'Assessment service unavailable. No new score was returned. Showing the score from 12 May 2026, 09:34.';
+  const run = screen.getByRole('button', {name: 'Run assessment'});
+  const retry = () => screen.getByRole('button', {name: 'Retry'});
+  await user.click(run);
+  await waitFor(() => expect(run).toBeEnabled(), {timeout: 2000});
+  expect(screen.getByText(outage)).toBeVisible();
+  expect(store.getSnapshot().sites[HARBOR].assessment).toEqual(morning);
+  await user.click(retry());
+  await waitFor(() => expect(retry()).toBeEnabled(), {timeout: 2000});
+  expect(store.getSnapshot().faults.retryFailuresRemaining).toBe(0);
+  expect(store.getSnapshot().sites[HARBOR].assessment).toEqual(morning);
+  await user.click(screen.getByRole('button', {name: 'Keep last score'}));
+  expect(screen.queryByRole('button', {name: 'Retry'})).not.toBeInTheDocument();
+  expect(screen.getByText(outage)).toBeVisible();
+  expect(screen.getByText('34%', {exact: true})).toBeVisible();
+  await user.click(run);
+  await waitFor(() => expect(retry()).toBeEnabled(), {timeout: 2000});
+  await user.click(retry());
+  await screen.findByText('Assessment complete. Probability 34%.', {}, {timeout: 2000});
+  expect(store.getSnapshot().sites[HARBOR].assessment.scoredAt).toBe('2026-05-12T09:40:00');
+  expect(screen.queryByText(outage)).not.toBeInTheDocument();
 });

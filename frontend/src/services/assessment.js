@@ -1,5 +1,6 @@
 /** Replay only released model inputs and discard delayed work after context changes. */
 import {captureSnapshot} from '../data/baseline.js';
+import {DEFAULT_PROGRAM, makeProgramBoard, PROGRAMS} from '../data/programs.js';
 import {BOARD_AT, REGISTER, ROW_ORDER} from '../data/register.js';
 import {authorize, INTENT, readAccess} from '../utils/access.js';
 import {assessmentIsDown, civilMillis, deriveReadiness, inHorizon, rowQuality} from '../utils/readiness.js';
@@ -24,7 +25,11 @@ export function assessmentSignature(site) {
   })]);
 }
 
-const fixtures = new Map(Object.values(REGISTER).filter(site => site.lifecycle === 'open')
+const releasedSites = [
+  ...Object.values(REGISTER),
+  ...Object.keys(PROGRAMS).filter(id => id !== DEFAULT_PROGRAM).flatMap(id => Object.values(makeProgramBoard(id).sites)),
+];
+const fixtures = new Map(releasedSites.filter(site => site.lifecycle === 'open')
   .map(site => [assessmentSignature(site), site.assessment]));
 
 /** Advance time by one deterministic second per successful board replay. */

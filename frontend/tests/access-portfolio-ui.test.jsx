@@ -11,6 +11,8 @@ import {continueAs} from '../src/utils/access.js';
 import {PERSON} from '../src/data/people.js';
 import {createBrowserStore} from '../src/utils/storage.js';
 
+const HARBOR_TITLE = 'Harbor Point is Critical. Hold the 18 May crew. Power is not ready.';
+
 beforeEach(() => {
   window.history.replaceState(null, '', '/login');
   // jsdom does not implement SubtleCrypto; use real Web Crypto for seeded login.
@@ -39,7 +41,7 @@ async function openBoard(user) {
 async function openHarborPoint(user) {
   await openBoard(user);
   await user.click(screen.getByRole('link', {name: 'Review Harbor Point'}));
-  await screen.findByRole('heading', {name: 'Harbor Point', level: 1});
+  await screen.findByRole('heading', {name: HARBOR_TITLE, level: 1});
   return screen.getByRole('combobox', {name: 'Search site id or name'});
 }
 
@@ -88,12 +90,12 @@ describe('shell site lookup', () => {
     const results = screen.getByRole('listbox', {name: 'Matching sites'});
     expect(within(results).getAllByRole('option')).toHaveLength(2);
     expect(within(results).queryByRole('option', {selected: true})).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', {name: 'Harbor Point', level: 1})).toBeVisible();
+    expect(screen.getByRole('heading', {name: HARBOR_TITLE, level: 1})).toBeVisible();
 
     await user.keyboard('{ArrowDown}');
     expect(within(results).getByRole('option', {selected: true})).toHaveTextContent('Point Richmond · NRO-W-1891');
     await user.keyboard('{Enter}');
-    expect(await screen.findByRole('heading', {name: 'Point Richmond', level: 1})).toBeVisible();
+    expect(await screen.findByRole('heading', {name: /^Point Richmond is /, level: 1})).toBeVisible();
     expect(screen.queryByRole('listbox', {name: 'Matching sites'})).not.toBeInTheDocument();
   });
 
@@ -108,7 +110,7 @@ describe('shell site lookup', () => {
     await user.keyboard('{Escape}');
     expect(lookup).toHaveAttribute('aria-expanded', 'false');
     expect(lookup).toHaveFocus();
-    expect(screen.getByRole('heading', {name: 'Harbor Point', level: 1})).toBeVisible();
+    expect(screen.getByRole('heading', {name: HARBOR_TITLE, level: 1})).toBeVisible();
   });
 });
 

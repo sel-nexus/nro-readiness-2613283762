@@ -67,6 +67,10 @@ h1, h2, h3, .text-ink, .text-body { color: var(--ink); }
 .program-footer { color: var(--canvas); }
 .program-footer :focus-visible { outline-color: var(--canvas); }
 
+.site-decision { max-width: 38ch; }
+.site-tab[aria-selected='true'] { border-bottom-color: var(--primary); color: var(--strong); background: var(--group); }
+.prediction-score { color: var(--primary); font-size: clamp(2.75rem, 6vw, 4rem); font-weight: 600; line-height: 1; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }

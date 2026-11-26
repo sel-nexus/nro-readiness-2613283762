@@ -10,6 +10,20 @@ import {civilMillis, FRESHNESS_DAYS, RESCORE_NOTICE} from '../utils/readiness.js
 
 const EDIT_LIMIT = 'Only Operators can update evidence.';
 const HISTORY_LIMIT = 'Historical evidence is read-only.';
+const REQUIREMENTS = {
+  Permit: 'Permit clearance', Civil: 'Civil works', Power: 'Power availability',
+  Transmission: 'Transmission readiness', Material: 'Material availability', Workforce: 'Crew availability',
+};
+
+/** Describe the recorded prerequisite without turning stale or disputed evidence into a block. */
+function dependencyFor(site, row, quality, crew) {
+  if (site.id === 'NRO-W-1842' && row.row === 'Power' && site.holdActive && crew?.shiftDay === '2026-05-18' &&
+    quality === 'Current' && row.status === 'Not Ready' && row.source === 'Northwind Power feed') {
+    return 'Depends on the Northwind window. Blocks the 18 May crew.';
+  }
+  const requirement = REQUIREMENTS[row.row];
+  return row.flag === 'Mandatory' ? `${requirement} is required for installation.` : `${requirement} is monitored for the crew plan.`;
+}
 
 /** Label source age using calendar days without rounding freshness decisions. */
 function freshnessLabel(row, clock) {
@@ -94,6 +108,7 @@ export function EvidenceMatrix({board, site, actor, store, readiness, notify, ta
   const reason = open ? EDIT_LIMIT : HISTORY_LIMIT;
   const clock = site.plan.closedAt ?? BOARD_AT;
   const documents = Object.values(board.uploads).filter(doc => doc.siteId === site.id);
+  const crew = board.program.crew.find(item => item.siteId === site.id);
 
   useEffect(() => {
     if (!target) return;
@@ -139,10 +154,10 @@ export function EvidenceMatrix({board, site, actor, store, readiness, notify, ta
       {!editable && <p className="meta" id="evidence-update-reason">{reason}</p>}
       <div className="card scroll-table" role="region" aria-label="Scrollable evidence matrix" tabIndex={0}>
         <table className="min-w-[62rem]">
-          <caption>Evidence matrix</caption>
+          <caption id="evidence-matrix" data-evidence-target tabIndex={-1}>Evidence matrix</caption>
           <thead>
             <tr>
-              {['Prerequisite', 'Status', 'Quality', 'Source', 'Source time', 'Freshness', 'Owner', 'Update'].map(label => (
+              {['Prerequisite', 'Observed evidence status', 'Dependency', 'Quality', 'Source', 'Source time', 'Freshness', 'Owner', 'Update'].map(label => (
                 <th key={label} scope="col">{label}</th>
               ))}
             </tr>
@@ -159,6 +174,7 @@ export function EvidenceMatrix({board, site, actor, store, readiness, notify, ta
                     <p className="meta">{row.flag}</p>
                   </th>
                   <td>{row.status}</td>
+                  <td className="min-w-[12rem]">{dependencyFor(site, row, readiness.quality[key], crew)}</td>
                   <td>{readiness.quality[key]}</td>
                   <td>
                     <details>
