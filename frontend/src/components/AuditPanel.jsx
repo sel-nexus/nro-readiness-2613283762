@@ -19,29 +19,42 @@ export function AuditPanel({board, site}) {
         {events.map(event => {
           const snapshot = board.audit.snapshots[event.snapshotId];
           const decision = site.decisions.find(item => item.id === event.decisionId);
-          const name = ACTORS[event.actorId] ?? (event.actorKind === 'model' ? event.model ?? 'Assessment model' : personName(board, event.actorId));
+          const approval = event.verb === 'Approval' || event.verb === 'Override';
+          const name = ACTORS[event.actorId] ?? (event.actorKind === 'model' ? 'Assessment model' : personName(board, event.actorId));
           return (
             <li key={event.id} className="py-2">
               <details>
                 <summary className="cursor-pointer py-1 font-medium">{event.verb} · {formatDate(event.at, true)} · {name}</summary>
                 <div className="space-y-2 pb-2 pl-4">
-                  <p className="break-words">{event.detail}</p>
+                  {event.verb !== 'Scored' && <p className="break-words">{event.detail}</p>}
                   {event.verb === 'Approval denied' ? (
                     <p>Actor ID: {event.actorId} · Attempted action: {event.attemptedVerb} · Reason: {event.reasonCode}</p>
                   ) : (
                     <>
                       <dl className="grid gap-2 sm:grid-cols-2">
-                        <div>
-                          <dt className="meta">Model version</dt>
-                          <dd>{event.model ?? 'Unavailable'}</dd>
-                        </div>
-                        <div>
-                          <dt className="meta">Correlation</dt>
-                          <dd>{event.correlationId ?? 'Unavailable'}</dd>
-                        </div>
+                        {approval && (
+                          <>
+                            <div>
+                              <dt className="meta">Downstream workflow ID</dt>
+                              <dd>{event.workflowId ?? decision?.workflowId ?? 'Not queued'}</dd>
+                            </div>
+                            <div>
+                              <dt className="meta">Model version</dt>
+                              <dd>{event.model ?? 'Unavailable'}</dd>
+                            </div>
+                            <div>
+                              <dt className="meta">Decided by</dt>
+                              <dd>{name}</dd>
+                            </div>
+                            <div>
+                              <dt className="meta">Decision time</dt>
+                              <dd><time dateTime={event.at}>{formatDate(event.at, true)}</time></dd>
+                            </div>
+                          </>
+                        )}
                         <div>
                           <dt className="meta">Input snapshot ID</dt>
-                          <dd>{snapshot?.id ?? 'Unavailable'}</dd>
+                          <dd>{event.snapshotId ?? decision?.assessmentRef ?? 'Unavailable'}</dd>
                         </div>
                         <div>
                           <dt className="meta">Output · Confidence</dt>
@@ -50,7 +63,7 @@ export function AuditPanel({board, site}) {
                         {decision && (
                           <div>
                             <dt className="meta">Decision</dt>
-                            <dd>{decision.disposition ?? `Approved — ${decision.scope.kind}`}{decision.workflowId ? ` · ${decision.workflowId}` : ''}</dd>
+                            <dd>{decision.disposition ?? `Approved — ${decision.scope.kind}`}</dd>
                           </div>
                         )}
                         {event.executionEvidenceRev != null && (

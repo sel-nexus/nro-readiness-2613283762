@@ -13,11 +13,18 @@ test.afterEach(async ({page}) => {
   expect(pageErrors.get(page), 'Browser console errors and uncaught exceptions').toEqual([]);
 });
 
-/** Enter the board in a fresh browser context. */
-async function enter(page, name) {
+/** Sign in and open a named program Board from Programs. */
+async function enter(page, name, program = 'West Metro Cluster 4') {
   await page.goto('/');
   await page.getByRole('button', {name: `Continue as ${name}`}).click();
-  await expect(page.getByRole('heading', {name: 'West Metro Cluster 4'})).toBeVisible();
+  await openBoard(page, program);
+}
+
+/** Confirm the landing page before following the real Board link. */
+async function openBoard(page, program) {
+  await expect(page.getByRole('heading', {name: 'Programs', exact: true, level: 1})).toBeVisible();
+  await page.getByRole('link', {name: `Open ${program}`, exact: true}).click();
+  await expect(page.getByRole('heading', {name: program, exact: true, level: 1})).toBeVisible();
 }
 
 /** Use the real account handoff instead of writing browser session records. */
@@ -25,15 +32,15 @@ async function handoff(page, from, to) {
   await page.getByRole('button', {name: from, exact: true}).click();
   await page.getByRole('button', {name: 'Switch user'}).click();
   await page.getByRole('button', {name: to, exact: true}).click();
-  await expect(page.getByRole('heading', {name: 'West Metro Cluster 4'})).toBeVisible();
+  await openBoard(page, 'West Metro Cluster 4');
 }
 
 /** Filter the portfolio, then follow the site's actual register link. */
 async function fromPortfolio(page, name, id, tab) {
-  await page.getByRole('searchbox', {name: 'Search site id or name'}).fill(id);
+  await page.getByRole('combobox', {name: 'Search site id or name'}).fill(id);
   await page.getByRole('table', {name: 'Site readiness register'}).getByRole('link', {name, exact: true}).click();
   await expect(page).toHaveURL(`/sites/${id}`);
-  await expect(page.getByRole('heading', {name, exact: true, level: 1})).toBeVisible();
+  await expect(page.getByRole('heading', {name: new RegExp(`^${name} is .+\\.$`), level: 1})).toBeVisible();
   await page.getByRole('tab', {name: tab, exact: true}).click();
 }
 
@@ -48,6 +55,45 @@ async function fromWorkspace(page, id, tab) {
 }
 
 const ACTION = 'Blockers and action';
+
+test('East Bay decisions are scoped, and a Marsh Junction approval links to its own audit', async ({page}) => {
+  await enter(page, 'Priya Raman', 'East Bay Cluster 2');
+  await page.getByRole('link', {name: 'Approvals', exact: true}).click();
+  await expect(page).toHaveURL('/approvals?program=east-bay');
+  const marsh = page.getByRole('region', {name: 'Marsh Junction'});
+  await expect(marsh).toContainText('NRO-E-2102');
+  await expect(page.getByRole('region', {name: 'Portside'})).toHaveCount(0);
+  const rationale = 'Confirm the independent East Bay supplier and proposed installation date.';
+  await marsh.getByLabel('Why is this the right call for the cluster?').fill(rationale);
+  await marsh.getByRole('button', {name: 'Approve', exact: true}).click();
+  await expect(page.getByText('No records for this program.')).toBeVisible();
+  await fromWorkspace(page, 'NRO-E-2102', 'Approval');
+  await expect(page.locator('#site-plan')).toContainText('22 May 2026');
+  await page.getByRole('tab', {name: /^Audit/}).click();
+  const event = page.getByRole('region', {name: 'Audit'}).locator('ol > li').filter({hasText: /^Approval ·/});
+  await event.locator('summary').click();
+  for (const value of ['ECO-2102-1', 'snap_NRO-E-2102_seed', 'nro-readiness-sim 1.4.2', 'Approved — resequence',
+    `Rationale: ${rationale}`, 'Priya Raman', '12 May 2026 09:40']) {
+    await expect(event.getByText(value, {exact: true})).toBeVisible();
+  }
+  await expect(event).not.toContainText('corr_NRO-E-2102_seed');
+  await page.getByRole('combobox', {name: 'Active program'}).selectOption('west-metro');
+  await page.getByRole('link', {name: 'Approvals', exact: true}).click();
+  await expect(page).toHaveURL('/approvals');
+  await expect(page.getByRole('region', {name: 'Portside'})).toBeVisible();
+  await expect(marsh).toHaveCount(0);
+});
+
+test('a Viewer sees disabled decision controls beside the East Bay request', async ({page}) => {
+  await enter(page, 'Jordan Ellis', 'East Bay Cluster 2');
+  await page.getByRole('link', {name: 'Approvals', exact: true}).click();
+  const marsh = page.getByRole('region', {name: 'Marsh Junction'});
+  for (const name of ['Approve', 'Reject', 'Modify']) {
+    const button = marsh.getByRole('button', {name, exact: true});
+    await expect(button).toBeDisabled();
+    await expect(button).toHaveAccessibleDescription(/Only the program manager.*Regional Viewer/);
+  }
+});
 
 test('Priya approves only the Portside supplier and date; Andre inherits the plan, not dispatch authority', async ({page}) => {
   await enter(page, 'Priya Raman');
@@ -106,7 +152,7 @@ test('Andre sees held and unconfirmed crews and dispatches Civic Center only aft
   const prediction = page.getByRole('region', {name: 'Assessment prediction'});
   await expect(prediction.getByText('34%', {exact: true})).toBeVisible();
   await expect(prediction.getByText('Confidence: 86% · High', {exact: true})).toBeVisible();
-  await expect(prediction.getByText('Confidence can help rank the blocker. It cannot authorize dispatch through a failed prerequisite.', {exact: true})).toBeVisible();
+  await expect(prediction.getByText('Evidence is complete enough to rank the blocker. It is not enough to dispatch through a failed prerequisite.', {exact: true})).toBeVisible();
   await page.getByRole('tab', {name: /^Audit/}).click();
   await expect(page.getByRole('region', {name: 'Audit'}).getByText(/^Dispatched ·/)).toHaveCount(0);
   await page.getByRole('tab', {name: ACTION, exact: true}).click();
@@ -138,11 +184,13 @@ test('Andre sees held and unconfirmed crews and dispatches Civic Center only aft
   const civicAudit = page.getByRole('region', {name: 'Audit'});
   await expect(civicAudit.getByText(/^Scored ·/)).toHaveCount(2);
   for (const [scoredAt, snapshotId] of [['11 May 2026 15:40', 'snap_1847_0511'], ['12 May 2026 09:34', 'snap_1847_0934']]) {
-    const summary = `Scored · ${scoredAt} · nro-readiness-sim 1.4.2`;
+    const summary = `Scored · ${scoredAt} · Assessment model`;
     const entry = civicAudit.getByRole('listitem').filter({has: page.getByText(summary, {exact: true})});
     await entry.getByText(summary, {exact: true}).click();
     await expect(entry.getByText(snapshotId, {exact: true})).toBeVisible();
     await expect(entry.getByText('92% · 90%', {exact: true})).toBeVisible();
+    await expect(entry).not.toContainText('nro-readiness-sim');
+    await expect(entry).not.toContainText('corr_');
   }
   await page.getByRole('tab', {name: ACTION, exact: true}).click();
   const dispatch = field.getByRole('button', {name: 'Dispatch crew'});

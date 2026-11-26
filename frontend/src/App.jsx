@@ -2,11 +2,12 @@
 import {useEffect, useRef, useState, useSyncExternalStore} from 'react';
 import PropTypes from 'prop-types';
 import {BrowserRouter, Link, Navigate, Route, Routes, matchPath, useLocation, useNavigate, useParams} from 'react-router-dom';
+import {ApprovalDraftScope, ApprovalQueue} from './components/ApprovalPanel.jsx';
 import {SharedShell} from './components/SharedShell.jsx';
 import {ProgramActivity, ProgramSchedule} from './components/ProgramPanels.jsx';
 import {RestoreDialog} from './components/RestoreDialog.jsx';
 import LoginPage from './pages/LoginPage.jsx';
-import Portfolio, {ProgramBoard, ProgramList} from './pages/Portfolio.jsx';
+import Portfolio, {ProgramBoard} from './pages/Portfolio.jsx';
 import {DEFAULT_PROGRAM, PROGRAMS, programPath, siteProgram} from './data/programs.js';
 import ServiceHealth from './pages/ServiceHealth.jsx';
 import SiteWorkspace from './pages/SiteWorkspace.jsx';
@@ -31,7 +32,11 @@ function ReleasedSite({board, actor, store, notify}) {
   const {siteId} = useParams();
   if (!Object.hasOwn(board.sites, siteId)) return <MissingPage title="Site not found" />;
   const site = board.sites[siteId];
-  return <SiteWorkspace key={siteId} board={board} site={site} actor={actor} store={store} notify={notify} />;
+  return (
+    <ApprovalDraftScope key={siteId}>
+      <SiteWorkspace board={board} site={site} actor={actor} store={store} notify={notify} />
+    </ApprovalDraftScope>
+  );
 }
 
 ReleasedSite.propTypes = {board: PropTypes.object.isRequired, actor: PropTypes.object.isRequired,
@@ -150,7 +155,9 @@ function BoardRoutes({accessStore, programId, validProgram}) {
             <Route path="/schedule" element={<ProgramSchedule board={board} schedulePath={programPath('/schedule', programId)}
               atStake={new URLSearchParams(location.search).get('view') === 'at-stake'} />} />
             <Route path="/activity" element={<ProgramActivity board={board} />} />
-            <Route path="/approvals" element={<ProgramList board={board} />} />
+            <Route path="/approvals" element={
+              <ApprovalQueue board={board} actor={actor} store={store} notify={notify} />
+            } />
             <Route path="/sites/:siteId" element={
               <ReleasedSite board={board} actor={actor} store={store} notify={notify} />
             } />

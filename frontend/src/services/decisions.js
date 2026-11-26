@@ -219,6 +219,12 @@ export function previewApproval(site, optionId = null) {
     scope, before, after, eligible: Boolean(eligible), reviewKey: JSON.stringify([proposal?.id, optionId, site.planRev, before, after, scope])};
 }
 
+/** List current reviewable requests waiting for the manager in this committed program. */
+export function pendingApprovals(board) {
+  return Object.values(board.sites).filter(site =>
+    site.proposal?.state === 'Pending approval' && previewApproval(site).eligible);
+}
+
 /** Record an intentional forbidden decision; never accept or retain rationale here. */
 export function recordApprovalDenial(store, {attempt, commandId, siteId, expectedSiteRev, expectedGeneration,
   expectedSessionEpoch, expectedSessionToken, proposalId, optionId} = {}) {

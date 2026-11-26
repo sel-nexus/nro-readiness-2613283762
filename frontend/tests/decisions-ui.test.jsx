@@ -1,15 +1,18 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import {cleanup, fireEvent, render, screen, within} from '@testing-library/react';
+import {act, cleanup, fireEvent, render, screen, within} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {useSyncExternalStore} from 'react';
 import {MemoryRouter} from 'react-router-dom';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
-import {ApprovalPanel} from '../src/components/ApprovalPanel.jsx';
+import App from '../src/App.jsx';
+import {ApprovalDraftScope, ApprovalPanel} from '../src/components/ApprovalPanel.jsx';
 import {AuditPanel} from '../src/components/AuditPanel.jsx';
 import {FieldStrip} from '../src/components/FieldStrip.jsx';
 import {PERSON} from '../src/data/people.js';
-import {BOARD_AT} from '../src/data/register.js';
+import {BOARD_AT, MODEL} from '../src/data/register.js';
+import SiteWorkspace from '../src/pages/SiteWorkspace.jsx';
+import {runAssessment} from '../src/services/assessment.js';
 import {continueAs, readAccess} from '../src/utils/access.js';
 import {deriveReadiness} from '../src/utils/readiness.js';
 import {createStore} from '../src/utils/storage.js';
@@ -17,6 +20,7 @@ import {createStore} from '../src/utils/storage.js';
 const PORTSIDE = 'NRO-W-1866';
 const CIVIC = 'NRO-W-1847';
 const HARBOR = 'NRO-W-1842';
+const MARSH = 'NRO-E-2102';
 const REASON_LABEL = 'Why is this the right call for the cluster?';
 const dialogPrototype = HTMLDialogElement.prototype;
 const originalDialogMethods = ['showModal', 'close'].map(name => [name, Object.getOwnPropertyDescriptor(dialogPrototype, name)]);
@@ -35,11 +39,112 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  window.history.replaceState(null, '', '/');
   for (const [name, descriptor] of originalDialogMethods) {
     if (descriptor) Object.defineProperty(dialogPrototype, name, descriptor);
     else delete dialogPrototype[name];
   }
   localStorage.clear();
+});
+
+it.each([PERSON.elena, PERSON.andre, PERSON.jordan, PERSON.samira, PERSON.marcus])(
+  'shows the East Bay queue but disables decisions for %s', async actorId => {
+    const west = createStore(localStorage);
+    expect(west.bootstrap().ok).toBe(true);
+    expect(continueAs(west, actorId).ok).toBe(true);
+    window.history.replaceState(null, '', '/approvals?program=east-bay');
+    render(<App />);
+    const request = within(await screen.findByRole('region', {name: 'Marsh Junction'}));
+    for (const name of ['Approve', 'Reject', 'Modify']) {
+      const action = request.getByRole('button', {name, exact: true});
+      expect(action).toBeDisabled();
+      expect(action).toHaveAccessibleDescription(/Only the program manager/);
+    }
+    expect(request.queryByRole('textbox', {name: REASON_LABEL})).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', {name: 'Portside'})).not.toBeInTheDocument();
+  },
+);
+
+it.each(['Approve', 'Reject', 'Modify'])('records %s in East Bay only, then removes the waiting item', async verb => {
+  const west = createStore(localStorage);
+  expect(west.bootstrap().ok).toBe(true);
+  expect(continueAs(west, PERSON.priya).ok).toBe(true);
+  const westBefore = west.getSnapshot().sites[PORTSIDE];
+  window.history.replaceState(null, '', '/approvals?program=east-bay');
+  const user = userEvent.setup();
+  render(<App />);
+  const request = within(await screen.findByRole('region', {name: 'Marsh Junction'}));
+  expect(request.getByRole('link', {name: 'Open Marsh Junction approval'})).toHaveAttribute('href', `/sites/${MARSH}?tab=approval`);
+  expect(screen.queryByRole('region', {name: 'Portside'})).not.toBeInTheDocument();
+  const rationale = 'Review the new civil works window before scheduling this crew.';
+  await user.type(request.getByRole('textbox', {name: REASON_LABEL}), rationale);
+  await user.click(request.getByRole('button', {name: verb, exact: true}));
+  if (verb === 'Modify') {
+    await user.selectOptions(request.getByRole('combobox', {name: 'Owner'}), PERSON.ruth);
+    fireEvent.change(request.getByLabelText('Due date'), {target: {value: '2026-05-17'}});
+    await user.type(request.getByRole('textbox', {name: 'Short note'}), 'Confirm the new visit window.');
+    await user.click(request.getByRole('button', {name: 'Save modification'}));
+  }
+  expect(await screen.findByText('No records for this program.')).toBeVisible();
+  const east = createStore(localStorage, 'east-bay');
+  expect(east.bootstrap().ok).toBe(true);
+  expect(east.getSnapshot().sites[MARSH].decisions).toEqual([
+    expect.objectContaining({verb: verb.toLowerCase(), rationale, actorId: PERSON.priya}),
+  ]);
+  expect(west.recover().data.sites[PORTSIDE]).toEqual(westBefore);
+  if (verb === 'Approve') {
+    await user.type(screen.getByRole('combobox', {name: 'Search site id or name'}), MARSH);
+    await user.keyboard('{Enter}');
+    await user.click(await screen.findByRole('tab', {name: /^Audit/}));
+    const audit = within(screen.getByRole('region', {name: 'Audit'}));
+    const summary = audit.getByText(/^Approval · 12 May 2026 09:40 · Priya Raman$/);
+    await user.click(summary);
+    const event = within(summary.closest('li'));
+    for (const value of ['ECO-2102-1', `snap_${MARSH}_seed`, MODEL, 'Approved — resequence', `Rationale: ${rationale}`, 'Priya Raman']) {
+      expect(event.getByText(value, {exact: true})).toBeVisible();
+    }
+    expect(event.getByText('12 May 2026 09:40', {exact: true})).toHaveAttribute('datetime', BOARD_AT);
+    expect(event.queryByText(new RegExp(`corr_${MARSH}_seed|^Correlation$`))).not.toBeInTheDocument();
+  }
+});
+
+it('retains the site rationale through a real failed assessment on the same page', async () => {
+  const store = createStore(localStorage);
+  expect(store.bootstrap().ok).toBe(true);
+  expect(continueAs(store, PERSON.priya).ok).toBe(true);
+  const notify = vi.fn();
+  function Site() {
+    const board = useSyncExternalStore(store.subscribe, store.getSnapshot);
+    return (
+      <ApprovalDraftScope>
+        <SiteWorkspace board={board} site={board.sites[PORTSIDE]} actor={readAccess(board)} store={store} notify={notify} />
+      </ApprovalDraftScope>
+    );
+  }
+  render(
+    <MemoryRouter initialEntries={[`/sites/${PORTSIDE}?tab=approval`]} future={{v7_startTransition: true, v7_relativeSplatPath: true}}>
+      <Site />
+    </MemoryRouter>,
+  );
+  const user = userEvent.setup();
+  const rationale = 'Civic Civil can take the pad in the confirmed window.';
+  await user.type(screen.getByRole('textbox', {name: REASON_LABEL}), rationale);
+  await act(async () => {
+    const {faults} = store.getSnapshot();
+    expect(store.commit({commandId: 'during-approval-outage'}, {writes: {
+      faults: {...faults, rev: faults.rev + 1, assessmentDown: true, retryFailuresRemaining: 1},
+    }}).ok).toBe(true);
+    const result = await runAssessment(store, {
+      commandId: 'failed-assessment-during-approval', siteId: PORTSIDE, expectedSiteRev: store.getSnapshot().sites[PORTSIDE].rev,
+    });
+    expect(result).toMatchObject({ok: true, data: {state: 'retained_outage'}});
+  });
+  expect(screen.getByRole('textbox', {name: REASON_LABEL})).toHaveValue(rationale);
+  expect(store.getSnapshot().sites[PORTSIDE].decisions).toEqual([]);
+  await user.click(screen.getByRole('button', {name: 'Approve', exact: true}));
+  expect(store.getSnapshot().sites[PORTSIDE].decisions).toEqual([
+    expect.objectContaining({verb: 'approve', rationale, workflowId: 'ECO-1866-1'}),
+  ]);
 });
 
 /** Connect the panels to real committed snapshots, just as the workspace does. */
